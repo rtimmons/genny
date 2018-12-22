@@ -197,6 +197,7 @@ IGNORE_PREFIX          =
 GENERATE_HTML          = YES
 HTML_OUTPUT            = html
 HTML_FILE_EXTENSION    = .html
+LAYOUT_FILE            = src/doxygen/DoxygenLayout.xml
 HTML_HEADER            = src/doxygen/header.html
 HTML_FOOTER            = src/doxygen/footer.html
 HTML_STYLESHEET        =
