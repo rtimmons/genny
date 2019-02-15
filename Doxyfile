@@ -161,6 +161,7 @@ FILE_PATTERNS          = *.c \
                          *.qsf
 RECURSIVE              = YES
 EXCLUDE                = build \
+                         dist \
                          src/python \
                          src/third_party \
                          src/gennylib/test \
