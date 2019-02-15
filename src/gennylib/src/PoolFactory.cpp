@@ -1,4 +1,18 @@
-#include <gennylib/PoolFactory.hpp>
+// Copyright 2019-present MongoDB Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include <gennylib/v1/PoolFactory.hpp>
 
 #include <iostream>
 #include <map>
@@ -10,8 +24,9 @@
 #include <mongocxx/uri.hpp>
 
 #include <gennylib/InvalidConfigurationException.hpp>
+#include <gennylib/v1/PoolManager.hpp>
 
-namespace genny {
+namespace genny::v1 {
 
 /** @private */
 struct PoolFactory::Config {
@@ -163,7 +178,8 @@ struct PoolFactory::Config {
     };
 };
 
-PoolFactory::PoolFactory(std::string_view rawUri) : _config(std::make_unique<Config>(rawUri)) {}
+PoolFactory::PoolFactory(std::string_view rawUri, PoolManager::OnCommandStartCallback apmCallback)
+    : _config(std::make_unique<Config>(rawUri)), _apmCallback{apmCallback} {}
 PoolFactory::~PoolFactory() {}
 
 std::string PoolFactory::makeUri() const {
@@ -192,9 +208,9 @@ mongocxx::options::pool PoolFactory::makeOptions() const {
         BOOST_LOG_TRIVIAL(debug) << "Using PEM Key file '" << pemKeyFile << "' for SSL/TLS";
         sslOptions = sslOptions.pem_file(pemKeyFile.data());
     }
-
     return mongocxx::options::client{}.ssl_opts(sslOptions);
 }
+
 std::unique_ptr<mongocxx::pool> PoolFactory::makePool() const {
     auto uriStr = makeUri();
     BOOST_LOG_TRIVIAL(info) << "Constructing pool with MongoURI '" << uriStr << "'";
@@ -202,13 +218,23 @@ std::unique_ptr<mongocxx::pool> PoolFactory::makePool() const {
     auto uri = mongocxx::uri{uriStr};
 
     auto poolOptions = mongocxx::options::pool{};
+
     auto useSsl = _config->getFlag(OptionType::kQueryOption, "ssl");
     if (useSsl) {
         poolOptions = makeOptions();
         BOOST_LOG_TRIVIAL(debug) << "Adding ssl options to pool...";
     }
 
-    return std::make_unique<mongocxx::pool>(uri, poolOptions);
+    // option::client can be implicitly coverted into option::pool. This is to be able to set the
+    // apm options for testing.
+    auto clientOpts = mongocxx::options::client{poolOptions.client_opts()};
+    if (_apmCallback) {
+        mongocxx::options::apm apmOptions;
+        apmOptions.on_command_started(_apmCallback);
+        clientOpts.apm_opts(apmOptions);
+    }
+
+    return std::make_unique<mongocxx::pool>(uri, clientOpts);
 }
 
 void PoolFactory::setOption(OptionType type, const std::string& option, std::string value) {
@@ -230,4 +256,4 @@ std::optional<std::string_view> PoolFactory::getOption(OptionType type,
     return _config->get(type, option);
 }
 
-}  // namespace genny
+}  // namespace genny::v1

@@ -4,108 +4,37 @@ Genny 🧞‍
 Genny is a workload-generator library and tool. It is implemented using
 C++17.
 
-### Quick-Start
+## Build and Install
 
-#### macOS
+Here're the steps to get genny up and running locally:
 
-1. [Download XCode 10](https://developer.apple.com/download/) (around 10GB) and install.
-2. Drag `Xcode.app` into `Applications`. For some reason the installer may put it in `~/Downloads`.
-3. Run the below shell (requires [`brew`](https://brew.sh/))
+1. Install the development tools for your OS.
 
-```sh
-sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+    - Ubuntu 18.04: `sudo apt install build-essential`
+    - Red Hat/CentOS 7/Amazon Linux 2: `sudo yum groupinstall "Development Tools"`
+    - Arch: Grab a beer. Everything should already be set up.
+    - macOS: `xcode-select --install`
+    - Windows: <https://visualstudio.microsoft.com/>
 
-# install third-party packages and build-tools
-brew install cmake
-brew install icu4c
-brew install mongo-cxx-driver
-brew install grpc
-brew install boost      \
-    --build-from-source \
-    --include-test      \
-    --with-icu4c
+1.  Make sure you have a C++17 compatible compiler and Python 3.
+    The ones from mongodbtoolchain are safe bets if you're unsure.
+    (mongodbtoolchain is internal to MongoDB).
 
-cmake -B "build" .
-make -C "build" genny
-```
+1. `./scripts/lamp [--linux-distro ubuntu1804/rhel7/amazon2/arch]`
 
-If you get boost errors:
+    This command downloads genny's toolchain, compiles genny and
+    installs genny to `dist/`. You can rerun this command at any time
+    to rebuild genny. If your OS isn't the supported, please let us
+    know in \#workload-generation or on GitHub.
 
-```sh
-brew remove boost
-brew install boost      \
-    --build-from-source \
-    --include-test      \
-    --with-icu4c
-```
+    Note that the `--linux-distro` argument is not needed on macOS.
 
-Other errors, run `brew doctor`.
+    You can also specify `--build-system make` if you prefer to build
+    using `make` rather than `ninja`. Building using `make` may make
+    some IDEs happier.
 
-##### Notes for macOS Mojave
 
-Mojave doesn't have `/usr/local` on system roots, so you need to set
-environment variables for clang/ldd to find libraries provided by
-homebrew.
-
-Put the following in your shell profile (`~/.bashrc` or `~/.zshrc` etc):
-
-```sh
-export CPLUS_INCLUDE_PATH="$(brew --prefix)/include"
-export LIBRARY_PATH="$(brew --prefix)/lib/:$LIBRARY_PATH"
-```
-
-This needs to be run before you run `cmake`. If you have already run
-`cmake`, then `rm -rf build/*` after putting this in your profile
-and restarting your shell.
-
-TODO: TIG-1263 This is kind of a hack; using built-in package-location
-mechanisms would avoid having to have OS-specific hacks like this.
-
-#### Linux Distributions
-
-Have installations of non-vendored dependent packages in your system,
-using the package manger. Generally this is:
-
-- cmake
-- boost
-- mongo-cxx-driver
-- grpc
-- icu
-
-To to build genny use the following commands:
-
-```sh
-cmake -B "build" .
-make -C "build" genny
-```
-
-You only need to run cmake once. Other useful targets include:
-
-- all
-- test_gennylib test_driver (builds tests)
-- test (run's tests if they're built)
-
-#### Other Operating Systems
-
-If not using OS X, ensure you have a recent C++ compiler and boost
-installation. You will also need packages installed corresponding to the
-above `brew install` lines.
-
-E.g. for Ubuntu:
-
-```sh
-apt-get install -y \
-    software-properties-common \
-    clang-6.0 \
-    make \
-    libboost-all-dev \
-    libgrpc++-dev
-
-# install mongo C++ driver:
-#   https://mongodb.github.io/mongo-cxx-driver/mongocxx-v3/installation/
-```
-
-#### IDEs and Whatnot
+### IDEs and Whatnot
 
 We follow CMake and C++17 best-practices so anything that doesn't work
 via "normal means" is probably a bug.
@@ -115,18 +44,36 @@ emacs, vim, etc.). Before doing anything cute (see
 [CONTRIBUTING.md](./CONTRIBUTING.md)), please do due-diligence to ensure
 it's not going to make common editing environments go wonky.
 
-### Running Genny Self-Tests
+If you're using CLion, make sure to set `CMake options`
+(in settings/preferences) so it can find the toolchain.
+
+The cmake command is printed when `lamp` runs, you can
+copy and paste the options into Clion. The options
+should look something like this:
+
+```bash
+-G some-build-system \
+-DCMAKE_PREFIX_PATH=/data/mci/gennytoolchain/installed/x64-osx-shared \
+-DCMAKE_TOOLCHAIN_FILE=/data/mci/gennytoolchain/scripts/buildsystems/vcpkg.cmake \
+-DVCPKG_TARGET_TRIPLET=x64-osx-static
+```
+
+If you run `./scripts/lamp -b make` it should set up everything for you.
+You just need to set the "Generation Path" to your `build` directory.
+
+## Running Genny Self-Tests
 
 Genny has self-tests using Catch2. You can run them with the following command:
 
 ```sh
-make -C "build" test_gennylib test_driver test
+# Build genny first: `./scripts/lamp [...]`
+./scripts/lamp cmake-test
 ```
 
-#### Perf Tests
+### Benchmark Tests
 
-The above `make test` line also runs so-called "perf" tests. They can
-take a while to run and may fail occasionally on local developer
+The above `cmake-test` line also runs so-called "benchmark" tests. They
+can take a while to run and may fail occasionally on local developer
 machines, especially if you have an IDE or web browser open while the
 test runs.
 
@@ -134,8 +81,8 @@ If you want to run all the tests except perf tests you can manually
 invoke the test binaries and exclude perf tests:
 
 ```sh
-make -C "build" benchmark_gennylib test
-./build/src/gennylib/test_gennylib '~[benchmark]'
+# Build genny first: `./scripts/lamp [...]`
+./build/src/gennylib/gennylib_test '~[benchmark]'
 ```
 
 Read more about specifying what tests to run [here][s].
@@ -163,7 +110,15 @@ When creating a new actor, `create-new-actor.sh` will generate a new test case
 template to ensure the new actor can run against different MongoDB topologies,
 please update the template as needed so it uses the newly created actor.
 
-### Running Genny Workloads
+### Debugging
+
+IDEs can debug Genny if it is built with the `Debug` build type:
+
+```sh
+./scripts/lamp -DCMAKE_BUILD_TYPE=Debug
+```
+
+## Running Genny Workloads
 
 First install mongodb and start a mongod process:
 
@@ -172,16 +127,15 @@ brew install mongodb
 mongod --dbpath=/tmp
 ```
 
-Then build Genny (see [above](#quick-start) for details):
+Then build Genny (see [above](#build-and-install) for details):
 
 And then run a workload:
 
 ```sh
-
-./build/src/driver/genny                                      \
-    --workload-file       src/driver/test/InsertRemove.yml \
-    --metrics-format      csv                                 \
-    --metrics-output-file build/genny-metrics.csv                 \
+./build/src/driver/genny                                            \
+    --workload-file       ./src/workloads/scale/InsertRemove.yml    \
+    --metrics-format      csv                                       \
+    --metrics-output-file build/genny-metrics.csv                   \
     --mongo-uri           'mongodb://localhost:27017'
 ```
 
@@ -192,7 +146,68 @@ in the above example).
 Post-processing of metrics data is done by Python scripts in the
 `src/python` directory. See [the README there](./src/python/README.md).
 
-### Code Style and Limitations
+## Creating New Actors
+
+To create a new Actor, run the following:
+
+```sh
+./scripts/create-new-actor.sh NameOfYourNewActor
+```
+
+## Workload YAMLs
+
+Workload YAMLs live in `src/workloads` and are organized by "theme". Theme
+is a bit of an organic (contrived) concept so please reach out to us on Slack
+or mention it in your PR if you're not sure which directory your workload
+YAML belongs in.
+
+All workload yamls must have an `Owners` field indicating which github team
+should receive PRs for the YAML. The files must end with the `.yml` suffix.
+Workload YAML itself is not currently linted but please try to make the files
+look tidy.
+
+## Patch-Testing Genny Changes with Sys-Perf / DSI
+
+Install the [evergreen command-line client](https://evergreen.mongodb.com/settings) and put it
+in your PATH.
+
+Create a patch build from the mongo repository
+```sh
+cd mongo
+evergreen patch -p sys-perf
+
+```
+
+You will see an output like this:
+
+```
+            ID : 5c533a2732f4174bbcb8bb2e
+       Created : 35.656ms ago
+    Description : <none>
+         Build : https://evergreen.mongodb.com/patch/5c533a2732f4174bbcb8bb2e
+      Finalized : No
+```
+
+Copy the value of the "ID" field and a browser window to the "Build" URL.
+
+Then, set the genny module in DSI with your local genny repo.
+```
+cd genny
+evergreen set-module -m dsi -i <ID> # Use the build ID from the previous step.
+```
+
+In the browser window, select the workloads you wish to run. Good
+examples are Linux Standalone / `big_update` and Linux Standalone /
+`insert_remove`.
+
+The task will compile mongodb and will then run your workloads. Expect to
+wait around 25 minutes.
+
+NB: After the task runs you can call `set-module` again with more local changes.
+You can restart the workloads from the Evergreen web UI.
+This lets you skip the 20 minute wait to recompile the server.
+
+## Code Style and Limitations
 
 > Don't get cute.
 
@@ -227,20 +242,20 @@ etc, you can run the clang sanitizers yourself easily.
 Running with TSAN:
 
     FLAGS="-pthread -fsanitize=thread -g -O1"
-    cmake -DCMAKE_CXX_FLAGS="$FLAGS" -B "build" .
-    make -C "build" test
-    ./build/src/driver/genny src/driver/test/Workload.yml
+    ./scripts/lamp -DCMAKE_CXX_FLAGS="$FLAGS"
+    ./scripts/lamp cmake-test
+    ./build/src/driver/genny ./workloads/docs/Workload.yml
 
 Running with ASAN:
 
     FLAGS="-pthread -fsanitize=address -O1 -fno-omit-frame-pointer -g"
-    cmake -DCMAKE_CXX_FLAGS="$FLAGS" -B "build" .
-    make -C "build" test
-    ./build/src/driver/genny src/driver/test/Workload.yml
+    ./scripts/lamp -DCMAKE_CXX_FLAGS="$FLAGS"
+    ./scripts/lamp cmake-test
+    ./build/src/driver/genny ./workloads/docs/Workload.yml
 
 Running with UBSAN
 
     FLAGS="-pthread -fsanitize=undefined -g -O1"
-    cmake -DCMAKE_CXX_FLAGS="$FLAGS" -B "build" .
-    make -C "build" test
-    ./build/src/driver/genny src/driver/test/Workload.yml
+    ./scripts/lamp -DCMAKE_CXX_FLAGS="$FLAGS"
+    ./scripts/lamp cmake-test
+    ./build/src/driver/genny ./workloads/docs/Workload.yml

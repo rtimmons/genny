@@ -1,81 +1,86 @@
-#include "test.h"
+// Copyright 2019-present MongoDB Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <chrono>
 #include <iostream>
 #include <optional>
 
+#include "NopActor.hpp"
 #include <gennylib/Orchestrator.hpp>
 #include <gennylib/PhaseLoop.hpp>
-#include <log.hh>
+#include <testlib/ActorHelper.hpp>
 
-#include <ActorHelper.hpp>
+#include <testlib/helpers.hpp>
 
 using namespace genny;
-using namespace genny::V1;
+using namespace genny::v1;
 using namespace std;
 
 namespace {
 
 //
 // Cute convenience operators -
-//  100_i   gives optional<int>     holding 100
-//  100_ms  gives optional<millis>  holding 100
+//  100_uis   gives optional<IntegerSpec> holding 100
+//  100_ts  gives optional<TimeSpec>   holding 100
 //
 // These are copy/pasta in PhaseLoop_test and orchestrator_test. Refactor.
-optional<int> operator"" _i(unsigned long long int v) {
-    return make_optional(v);
+optional<IntegerSpec> operator""_uis(unsigned long long v) {
+    return make_optional(IntegerSpec(v));
 }
 
-optional<chrono::milliseconds> operator"" _ms(unsigned long long int v) {
-    return make_optional(chrono::milliseconds{v});
+optional<TimeSpec> operator""_ts(unsigned long long v) {
+    return make_optional(TimeSpec(chrono::milliseconds{v}));
 }
 
 }  // namespace
 
 TEST_CASE("Correctness for N iterations") {
     genny::metrics::Registry metrics;
-    genny::Orchestrator o{metrics.gauge("PhaseNumber")};
+    genny::Orchestrator o{};
 
     SECTION("Loops 0 Times") {
-        V1::ActorPhase<int> loop{
-            o, std::make_unique<V1::IterationCompletionCheck>(nullopt, 0_i, false), 1};
+        v1::ActorPhase<int> loop{
+            o, std::make_unique<v1::IterationChecker>(nullopt, 0_uis, false), 1};
         int i = 0;
         for (auto _ : loop)
             ++i;
         REQUIRE(i == 0);
     }
-    SECTION("Loops 1 Time") {
-        V1::ActorPhase<int> loop{
-            o, std::make_unique<V1::IterationCompletionCheck>(nullopt, 1_i, false), 1};
+    SECTION("Loops 1 TimeSpec") {
+        v1::ActorPhase<int> loop{
+            o, std::make_unique<v1::IterationChecker>(nullopt, 1_uis, false), 1};
         int i = 0;
         for (auto _ : loop)
             ++i;
         REQUIRE(i == 1);
     }
     SECTION("Loops 113 Times") {
-        V1::ActorPhase<int> loop{
-            o, std::make_unique<V1::IterationCompletionCheck>(nullopt, 113_i, false), 1};
+        v1::ActorPhase<int> loop{
+            o, std::make_unique<v1::IterationChecker>(nullopt, 113_uis, false), 1};
         int i = 0;
         for (auto _ : loop)
             ++i;
         REQUIRE(i == 113);
     }
-
-    SECTION("Configured for -1 Times barfs") {
-        REQUIRE_THROWS_WITH((V1::ActorPhase<int>{o,
-                                                 std::make_unique<V1::IterationCompletionCheck>(
-                                                     nullopt, make_optional(-1), false),
-                                                 1}),
-                            Catch::Contains("Need non-negative number of iterations. Gave -1"));
-    }
 }
 
 TEST_CASE("Correctness for N milliseconds") {
     genny::metrics::Registry metrics;
-    genny::Orchestrator o{metrics.gauge("PhaseNumber")};
+    genny::Orchestrator o{};
     SECTION("Loops 0 milliseconds so zero times") {
-        V1::ActorPhase<int> loop{
-            o, std::make_unique<V1::IterationCompletionCheck>(0_ms, nullopt, false), 0};
+        v1::ActorPhase<int> loop{
+            o, std::make_unique<v1::IterationChecker>(0_ts, nullopt, false), 0};
         int i = 0;
         for (auto _ : loop)
             ++i;
@@ -84,8 +89,8 @@ TEST_CASE("Correctness for N milliseconds") {
     SECTION("Looping for 10 milliseconds takes between 10 and 11 milliseconds") {
         // we nop in the loop so ideally it should take exactly 10ms, but don't want spurious
         // failures
-        V1::ActorPhase<int> loop{
-            o, std::make_unique<V1::IterationCompletionCheck>(10_ms, nullopt, false), 0};
+        v1::ActorPhase<int> loop{
+            o, std::make_unique<v1::IterationChecker>(10_ts, nullopt, false), 0};
 
         auto start = chrono::system_clock::now();
         for (auto _ : loop) {
@@ -101,18 +106,18 @@ TEST_CASE("Correctness for N milliseconds") {
 
 TEST_CASE("Combinations of duration and iterations") {
     genny::metrics::Registry metrics;
-    genny::Orchestrator o{metrics.gauge("PhaseNumber")};
+    genny::Orchestrator o{};
     SECTION("Loops 0 milliseconds but 100 times") {
-        V1::ActorPhase<int> loop{
-            o, std::make_unique<V1::IterationCompletionCheck>(0_ms, 100_i, false), 0};
+        v1::ActorPhase<int> loop{
+            o, std::make_unique<v1::IterationChecker>(0_ts, 100_uis, false), 0};
         int i = 0;
         for (auto _ : loop)
             ++i;
         REQUIRE(i == 100);
     }
     SECTION("Loops 5 milliseconds, 100 times: 10 millis dominates") {
-        V1::ActorPhase<int> loop{
-            o, std::make_unique<V1::IterationCompletionCheck>(5_ms, 100_i, false), 0};
+        v1::ActorPhase<int> loop{
+            o, std::make_unique<v1::IterationChecker>(5_ts, 100_uis, false), 0};
 
         auto start = chrono::system_clock::now();
         int i = 0;
@@ -127,25 +132,24 @@ TEST_CASE("Combinations of duration and iterations") {
         REQUIRE(elapsed <= 6);
     }
     // It's tempting to write a test where the # iterations dominates the time
-    // e.g. OperationLoop loop{1000000000000_i, 1_ms} but that would fail spuriously
+    // e.g. OperationLoop loop{1000000000000_uis, 1_ts} but that would fail spuriously
     // on super-fast hardware. So resist the temptation and trust the logical
     // combinations of the other tests 🙈
 
     SECTION("Configured for -1 milliseconds barfs") {
-        REQUIRE_THROWS_WITH(
-            (V1::ActorPhase<int>{o,
-                                 std::make_unique<V1::IterationCompletionCheck>(
-                                     make_optional(chrono::milliseconds{-1}), nullopt, false),
-                                 0}),
-            Catch::Contains("Need non-negative duration. Gave -1 milliseconds"));
+        REQUIRE_THROWS_WITH((v1::ActorPhase<int>{o,
+                                                 std::make_unique<v1::IterationChecker>(
+                                                     make_optional(TimeSpec{-1}), nullopt, false),
+                                                 0}),
+                            Catch::Contains("Need non-negative duration. Gave -1 milliseconds"));
     }
 }
 
 TEST_CASE("Can do without either iterations or duration") {
     genny::metrics::Registry metrics;
-    genny::Orchestrator o{metrics.gauge("PhaseNumber")};
-    V1::ActorPhase<int> actorPhase{
-        o, std::make_unique<V1::IterationCompletionCheck>(nullopt, nullopt, false), 0};
+    genny::Orchestrator o{};
+    v1::ActorPhase<int> actorPhase{
+        o, std::make_unique<v1::IterationChecker>(nullopt, nullopt, false), 0};
     auto iters = 0;
     for (auto&& _ : actorPhase) {
         ++iters;
@@ -160,9 +164,8 @@ TEST_CASE("Can do without either iterations or duration") {
 
 TEST_CASE("Iterator concept correctness") {
     genny::metrics::Registry metrics;
-    genny::Orchestrator o{metrics.gauge("PhaseNumber")};
-    V1::ActorPhase<int> loop{
-        o, std::make_unique<V1::IterationCompletionCheck>(nullopt, 1_i, false), 0};
+    genny::Orchestrator o{};
+    v1::ActorPhase<int> loop{o, std::make_unique<v1::IterationChecker>(nullopt, 1_uis, false), 0};
 
     // can deref
     SECTION("Deref and advance works") {
@@ -329,7 +332,8 @@ TEST_CASE("Actual Actor Example") {
             Actors:
             - Type: Inc
               Phases:
-              - Operation:
+              - Phase: 0
+                Operation:
                   OperationName: Nop
               - Repeat: 10
                 Key: 71
@@ -352,5 +356,25 @@ TEST_CASE("Actual Actor Example") {
                 std::unordered_map<int, int>{
                     {72, 10},  // keys & vals came from yaml config. Keys have a +1 offset.
                     {94, 3}});
+    }
+
+    SECTION("Throws with other keywords in Nop phases") {
+        // This is how a Nop command should be specified.
+        YAML::Node config = YAML::Load(R"(
+            SchemaVersion: 2018-07-01
+            Actors:
+            - Type: Nop
+              Phases:
+              - Phase: 0
+                Operation:
+                  OperationName: Nop
+                Duration: 7 minutes
+        )");
+        REQUIRE_THROWS_WITH(
+            ([&]() {
+                ActorHelper ah(config, 1, {{"Nop", genny::actor::NopActor::producer()}});
+            }()),
+            Catch::Matches("'Nop' cannot be used with any other keywords except 'Phase'. Check YML "
+                           "configuration."));
     }
 }

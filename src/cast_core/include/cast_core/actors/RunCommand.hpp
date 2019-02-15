@@ -1,9 +1,25 @@
+// Copyright 2019-present MongoDB Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #ifndef HEADER_32412A69_F128_4BC8_8335_520EE35F5381
 #define HEADER_32412A69_F128_4BC8_8335_520EE35F5381
 
 #include <gennylib/Actor.hpp>
 #include <gennylib/PhaseLoop.hpp>
 #include <gennylib/context.hpp>
+
+#include <cast_core/config/RunCommandConfig.hpp>
 
 namespace genny::actor {
 
@@ -39,13 +55,13 @@ namespace genny::actor {
  *       OperationCommand:
  *         currentOp: 1
  * ```
+ *
+ * Owner: STM
  */
-
 class RunCommand : public Actor {
-
 public:
     explicit RunCommand(ActorContext& context);
-    ~RunCommand() = default;
+    ~RunCommand() override = default;
 
     static std::string_view defaultName() {
         return "RunCommand";
@@ -54,9 +70,10 @@ public:
     void run() override;
 
 private:
-    struct PhaseConfig;
     genny::DefaultRandom _rng;
     mongocxx::pool::entry _client;
+
+    struct PhaseConfig;
     PhaseLoop<PhaseConfig> _loop;
 };
 

@@ -1,4 +1,16 @@
-#include "test.h"
+// Copyright 2019-present MongoDB Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <chrono>
 #include <iostream>
@@ -14,6 +26,8 @@
 #include <gennylib/PhaseLoop.hpp>
 #include <gennylib/context.hpp>
 
+#include <testlib/helpers.hpp>
+
 using namespace genny;
 using namespace std::chrono;
 using namespace std;
@@ -26,15 +40,15 @@ std::mutex asserting;
 
 //
 // Cute convenience operators -
-//  100_i   gives optional<int>     holding 100
-//  100_ms  gives optional<millis>  holding 100
+//  100_uis   gives optional<IntegerSpec>     holding 100
+//  100_ts  gives optional<millis>  holding 100
 //
 // These are copy/pasta in PhaseLoop_test and orchestrator_test. Refactor.
-optional<int> operator"" _i(unsigned long long int v) {
-    return make_optional(v);
+optional<IntegerSpec> operator""_uis(unsigned long long v) {
+    return make_optional(IntegerSpec(v));
 }
-optional<chrono::milliseconds> operator"" _ms(unsigned long long int v) {
-    return make_optional(chrono::milliseconds{v});
+optional<TimeSpec> operator""_ts(unsigned long long v) {
+    return make_optional(TimeSpec(chrono::milliseconds{v}));
 }
 
 std::thread start(Orchestrator& o,
@@ -79,7 +93,7 @@ bool advancePhase(Orchestrator& o) {
 
 TEST_CASE("Non-Blocking start") {
     genny::metrics::Registry metrics;
-    genny::Orchestrator o{metrics.gauge("PhaseNumber")};
+    genny::Orchestrator o{};
     o.addRequiredTokens(2);
 
     // 2 tokens but we only count down 1 so normally would block
@@ -89,7 +103,7 @@ TEST_CASE("Non-Blocking start") {
 
 TEST_CASE("Non-Blocking end (background progression)") {
     genny::metrics::Registry metrics;
-    genny::Orchestrator o{metrics.gauge("PhaseNumber")};
+    genny::Orchestrator o{};
     o.addRequiredTokens(2);
 
     auto bgIters = 0;
@@ -122,7 +136,7 @@ TEST_CASE("Non-Blocking end (background progression)") {
 
 TEST_CASE("Can add more tokens at start") {
     genny::metrics::Registry metrics;
-    genny::Orchestrator o{metrics.gauge("PhaseNumber")};
+    genny::Orchestrator o{};
     o.addRequiredTokens(2);
 
     auto t1 = start(o, 0, false, 2);
@@ -141,7 +155,7 @@ TEST_CASE("Can add more tokens at start") {
 
 TEST_CASE("Set minimum number of phases") {
     genny::metrics::Registry metrics;
-    genny::Orchestrator o{metrics.gauge("PhaseNumber")};
+    genny::Orchestrator o{};
     REQUIRE(o.currentPhase() == 0);
     o.phasesAtLeastTo(1);
     REQUIRE(advancePhase(o));  // 0->1
@@ -167,7 +181,7 @@ TEST_CASE("Set minimum number of phases") {
 
 TEST_CASE("Orchestrator") {
     genny::metrics::Registry metrics;
-    genny::Orchestrator o{metrics.gauge("PhaseNumber")};
+    genny::Orchestrator o{};
     o.addRequiredTokens(2);
     o.phasesAtLeastTo(1);
 
@@ -221,19 +235,19 @@ TEST_CASE("Orchestrator") {
     }
 }
 
-// more easily construct V1::ActorPhase instances
+// more easily construct v1::ActorPhase instances
 using PhaseConfig =
-    std::tuple<PhaseNumber, int, std::optional<int>, std::optional<std::chrono::milliseconds>>;
+    std::tuple<PhaseNumber, int, std::optional<IntegerSpec>, std::optional<TimeSpec>>;
 
-std::unordered_map<PhaseNumber, V1::ActorPhase<int>> makePhaseConfig(
+std::unordered_map<PhaseNumber, v1::ActorPhase<int>> makePhaseConfig(
     Orchestrator& orchestrator, const std::vector<PhaseConfig>& phaseConfigs) {
 
-    std::unordered_map<PhaseNumber, V1::ActorPhase<int>> out;
+    std::unordered_map<PhaseNumber, v1::ActorPhase<int>> out;
     for (auto&& [phaseNum, phaseVal, iters, dur] : phaseConfigs) {
         auto [it, success] =
             out.try_emplace(phaseNum,
                             orchestrator,
-                            std::make_unique<const V1::IterationCompletionCheck>(dur, iters, false),
+                            std::make_unique<v1::IterationChecker>(dur, iters, false),
                             phaseNum,
                             phaseVal);
         // prevent misconfiguration within test (dupe phaseNum vals)
@@ -248,14 +262,14 @@ std::unordered_map<PhaseNumber, V1::ActorPhase<int>> makePhaseConfig(
 
 TEST_CASE("Two non-blocking Phases") {
     genny::metrics::Registry metrics;
-    genny::Orchestrator o{metrics.gauge("PhaseNumber")};
+    genny::Orchestrator o{};
     o.addRequiredTokens(1);
     o.phasesAtLeastTo(1);
 
     std::unordered_set<PhaseNumber> seenPhases{};
     std::unordered_set<int> seenActorPhaseValues;
 
-    auto phaseConfig{makePhaseConfig(o, {{0, 7, 2_i, nullopt}, {1, 9, 2_i, nullopt}})};
+    auto phaseConfig{makePhaseConfig(o, {{0, 7, 2_uis, nullopt}, {1, 9, 2_uis, nullopt}})};
 
     auto count = 0;
     for (auto&& h : PhaseLoop<int>{o, std::move(phaseConfig)}) {
@@ -273,12 +287,12 @@ TEST_CASE("Two non-blocking Phases") {
 
 TEST_CASE("Single Blocking Phase") {
     genny::metrics::Registry metrics;
-    genny::Orchestrator o{metrics.gauge("PhaseNumber")};
+    genny::Orchestrator o{};
     o.addRequiredTokens(1);
 
     std::unordered_set<PhaseNumber> seen{};
 
-    auto phaseConfig{makePhaseConfig(o, {{0, 7, 1_i, nullopt}})};
+    auto phaseConfig{makePhaseConfig(o, {{0, 7, 1_uis, nullopt}})};
     for (auto&& h : PhaseLoop<int>{o, std::move(phaseConfig)}) {
         seen.insert(h.phaseNumber());
     }
@@ -288,15 +302,15 @@ TEST_CASE("Single Blocking Phase") {
 
 TEST_CASE("single-threaded range-based for loops all phases blocking") {
     genny::metrics::Registry metrics;
-    genny::Orchestrator o{metrics.gauge("PhaseNumber")};
+    genny::Orchestrator o{};
     o.addRequiredTokens(1);
     o.phasesAtLeastTo(2);
 
     auto phaseConfig{makePhaseConfig(o,
                                      {// all blocking on # iterations
-                                      {0, 7, 1_i, nullopt},
-                                      {1, 9, 2_i, nullopt},
-                                      {2, 11, 3_i, nullopt}})};
+                                      {0, 7, 1_uis, nullopt},
+                                      {1, 9, 2_uis, nullopt},
+                                      {2, 11, 3_uis, nullopt}})};
 
     std::unordered_set<PhaseNumber> seen;
 
@@ -315,7 +329,7 @@ TEST_CASE("single-threaded range-based for loops all phases blocking") {
 
 TEST_CASE("single-threaded range-based for loops no phases blocking") {
     genny::metrics::Registry metrics;
-    genny::Orchestrator o{metrics.gauge("PhaseNumber")};
+    genny::Orchestrator o{};
     o.addRequiredTokens(1);
     o.phasesAtLeastTo(2);
 
@@ -342,14 +356,14 @@ TEST_CASE("single-threaded range-based for loops no phases blocking") {
 
 TEST_CASE("single-threaded range-based for loops non-blocking then blocking") {
     genny::metrics::Registry metrics;
-    genny::Orchestrator o{metrics.gauge("PhaseNumber")};
+    genny::Orchestrator o{};
     o.addRequiredTokens(1);
     o.phasesAtLeastTo(1);
 
     auto phaseConfig{makePhaseConfig(o,
                                      {// non-block then block
                                       {0, 7, nullopt, nullopt},
-                                      {1, 9, 1_i, nullopt}})};
+                                      {1, 9, 1_uis, nullopt}})};
     std::unordered_set<PhaseNumber> seen;
 
     auto iters = 0;
@@ -366,13 +380,13 @@ TEST_CASE("single-threaded range-based for loops non-blocking then blocking") {
 
 TEST_CASE("single-threaded range-based for loops blocking then non-blocking") {
     genny::metrics::Registry metrics;
-    genny::Orchestrator o{metrics.gauge("PhaseNumber")};
+    genny::Orchestrator o{};
     o.addRequiredTokens(1);
     o.phasesAtLeastTo(1);
 
     auto phaseConfig{makePhaseConfig(o,
                                      {// block then non-block
-                                      {0, 7, 1_i, nullopt},
+                                      {0, 7, 1_uis, nullopt},
                                       {1, 9, nullopt, nullopt}})};
 
     std::unordered_set<PhaseNumber> seen;
@@ -392,14 +406,14 @@ TEST_CASE("single-threaded range-based for loops blocking then non-blocking") {
 
 TEST_CASE("single-threaded range-based for loops blocking then blocking") {
     genny::metrics::Registry metrics;
-    genny::Orchestrator o{metrics.gauge("PhaseNumber")};
+    genny::Orchestrator o{};
     o.addRequiredTokens(1);
     o.phasesAtLeastTo(1);
 
     auto phaseConfig{makePhaseConfig(o,
                                      {// block then block
-                                      {0, 7, 1_i, nullopt},
-                                      {1, 9, 1_i, nullopt}})};
+                                      {0, 7, 1_uis, nullopt},
+                                      {1, 9, 1_uis, nullopt}})};
 
     std::unordered_set<PhaseNumber> seen;
 
@@ -418,7 +432,7 @@ TEST_CASE("single-threaded range-based for loops blocking then blocking") {
 
 TEST_CASE("Range-based for stops when Orchestrator says Phase is done") {
     genny::metrics::Registry metrics;
-    genny::Orchestrator o{metrics.gauge("PhaseNumber")};
+    genny::Orchestrator o{};
     o.addRequiredTokens(2);
 
     std::atomic_bool blockingDone = false;
@@ -427,7 +441,7 @@ TEST_CASE("Range-based for stops when Orchestrator says Phase is done") {
 
     // t1 blocks for 75ms in Phase 0
     auto t1 = std::thread([&]() {
-        for (auto&& h : PhaseLoop<int>{o, makePhaseConfig(o, {{0, 0, nullopt, 75_ms}})})
+        for (auto&& h : PhaseLoop<int>{o, makePhaseConfig(o, {{0, 0, nullopt, 75_ts}})})
             for (auto _ : h) {
             }  // nop
         blockingDone = true;
@@ -453,7 +467,7 @@ TEST_CASE("Range-based for stops when Orchestrator says Phase is done") {
 
 TEST_CASE("Multi-threaded Range-based for loops") {
     genny::metrics::Registry metrics;
-    genny::Orchestrator o{metrics.gauge("PhaseNumber")};
+    genny::Orchestrator o{};
     o.addRequiredTokens(2);
     o.phasesAtLeastTo(1);
 
@@ -471,7 +485,7 @@ TEST_CASE("Multi-threaded Range-based for loops") {
         auto phaseConfig{makePhaseConfig(o,
                                          {// non-block then block
                                           {0, 7, nullopt, nullopt},
-                                          {1, 9, 1_i, nullopt}})};
+                                          {1, 9, 1_uis, nullopt}})};
 
         for (auto&& holder : PhaseLoop<int>{o, std::move(phaseConfig)}) {
             switch (holder.phaseNumber()) {
@@ -498,7 +512,7 @@ TEST_CASE("Multi-threaded Range-based for loops") {
     auto t2 = std::thread([&]() {
         auto phaseConfig{makePhaseConfig(o,
                                          {// block then non-block
-                                          {0, 7, 1_i, nullopt},
+                                          {0, 7, 1_uis, nullopt},
                                           {1, 9, nullopt, nullopt}})};
 
         auto prevPhaseStart = system_clock::now();

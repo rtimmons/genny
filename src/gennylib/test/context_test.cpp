@@ -1,4 +1,17 @@
-#include "test.h"
+// Copyright 2019-present MongoDB Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 
 #include <functional>
 #include <iomanip>
@@ -11,10 +24,10 @@
 
 #include <gennylib/PhaseLoop.hpp>
 #include <gennylib/context.hpp>
-#include <gennylib/metrics.hpp>
-#include <log.hh>
+#include <metrics/metrics.hpp>
+#include <testlib/ActorHelper.hpp>
 
-#include <ActorHelper.hpp>
+#include <testlib/helpers.hpp>
 
 using namespace genny;
 using namespace std;
@@ -30,11 +43,11 @@ static constexpr std::string_view mongoUri = "mongodb://localhost:27017";
 template <class Out, class... Args>
 void errors(const string& yaml, string message, Args... args) {
     genny::metrics::Registry metrics;
-    genny::Orchestrator orchestrator{metrics.gauge("PhaseNumber")};
+    genny::Orchestrator orchestrator{};
     string modified = "SchemaVersion: 2018-07-01\nActors: []\n" + yaml;
     auto read = YAML::Load(modified);
     auto test = [&]() {
-        auto context = WorkloadContext{read, metrics, orchestrator, mongoUri.data(), {}};
+        auto context = WorkloadContext{read, metrics, orchestrator, mongoUri.data(), Cast{}};
         return context.get<Out>(std::forward<Args>(args)...);
     };
     CHECK_THROWS_WITH(test(), StartsWith(message));
@@ -45,11 +58,11 @@ template <class Out,
           class... Args>
 void gives(const string& yaml, OutV expect, Args... args) {
     genny::metrics::Registry metrics;
-    genny::Orchestrator orchestrator{metrics.gauge("PhaseNumber")};
+    genny::Orchestrator orchestrator{};
     string modified = "SchemaVersion: 2018-07-01\nActors: []\n" + yaml;
     auto read = YAML::Load(modified);
     auto test = [&]() {
-        auto context = WorkloadContext{read, metrics, orchestrator, mongoUri.data(), {}};
+        auto context = WorkloadContext{read, metrics, orchestrator, mongoUri.data(), Cast{}};
         return context.get<Out, Required>(std::forward<Args>(args)...);
     };
     REQUIRE(test() == expect);
@@ -76,7 +89,7 @@ struct OpProducer : public ActorProducer {
 
 TEST_CASE("loads configuration okay") {
     genny::metrics::Registry metrics;
-    genny::Orchestrator orchestrator{metrics.gauge("PhaseNumber")};
+    genny::Orchestrator orchestrator{};
 
     auto cast = Cast{
         {"NoOp", std::make_shared<NoOpProducer>()},
@@ -158,11 +171,6 @@ Actors:
         };
         REQUIRE_THROWS_WITH(test(), Matches(R"(Invalid key \[Actors\] at path(.*\n*)*)"));
     }
-    SECTION("Invalid MongoUri") {
-        auto yaml = YAML::Load("SchemaVersion: 2018-07-01\nActors: []");
-        auto test = [&]() { WorkloadContext w(yaml, metrics, orchestrator, "::notValid::", cast); };
-        REQUIRE_THROWS_WITH(test(), Matches(R"(an invalid MongoDB URI was provided)"));
-    }
 
     SECTION("Can call two actor producers") {
         auto yaml = YAML::Load(R"(
@@ -231,9 +239,9 @@ Actors:
     }
 }
 
-void onContext(YAML::Node& yaml, std::function<void(ActorContext&)> op) {
+void onContext(YAML::Node yaml, std::function<void(ActorContext&)> op) {
     genny::metrics::Registry metrics;
-    genny::Orchestrator orchestrator{metrics.gauge("PhaseNumber")};
+    genny::Orchestrator orchestrator{};
 
     auto cast = Cast{
         {"Op", std::make_shared<OpProducer>(op)},
@@ -337,7 +345,7 @@ TEST_CASE("Duplicate Phase Numbers") {
     )");
 
     metrics::Registry metrics;
-    genny::Orchestrator orchestrator{metrics.gauge("PhaseNumber")};
+    genny::Orchestrator orchestrator{};
 
     auto cast = Cast{
         {"NoOp", std::make_shared<NoOpProducer>()},
@@ -446,4 +454,294 @@ TEST_CASE("Actors Share WorkloadContext State") {
 
     REQUIRE(WorkloadContext::getActorSharedState<DummyInsert, DummyInsert::InsertCounter>() ==
             10 * 10);
+}
+
+struct TakesInt {
+    int value;
+    TakesInt(int x) : value{x} {
+        if (x > 7) {
+            throw std::logic_error("Expected");
+        }
+    }
+};
+
+struct AnotherInt : public TakesInt {
+    // need no-arg ctor to be able to do YAML::Node::as<>()
+    AnotherInt() : AnotherInt(0) {}
+    AnotherInt(int x) : TakesInt(x) {}
+};
+
+namespace YAML {
+
+template <>
+struct convert<AnotherInt> {
+    static Node encode(const AnotherInt& rhs) {
+        return {};
+    }
+    static bool decode(const Node& node, AnotherInt& rhs) {
+        rhs = AnotherInt{node.as<int>()};
+        return true;
+    }
+};
+
+}  // namespace YAML
+
+TEST_CASE("getPlural") {
+    auto createYaml = [](std::string actorYaml) {
+        auto doc = YAML::Load(R"(
+SchemaVersion: 2018-07-01
+Numbers: [1,2,3]
+Actors: [{}]
+)");
+        auto actor = YAML::Load(actorYaml);
+        actor["Type"] = "Op";
+        doc["Actors"][0] = actor;
+        return doc;
+    };
+
+    // can use built-in decode types
+    onContext(createYaml("Foo: 5"), [](ActorContext& c) {
+        c.getPlural<TakesInt>("Foo", "Foos", [](YAML::Node n) { return TakesInt{n.as<int>()}; });
+    });
+
+    onContext(createYaml("Foo: 5"), [](ActorContext& c) {
+        REQUIRE(c.getPlural<AnotherInt>("Foo", "Foos")[0].value == 5);
+    });
+
+    onContext(createYaml("{}"), [](ActorContext& c) {
+        REQUIRE_THROWS_WITH([&]() { c.getPlural<int>("Foo", "Foos"); }(),
+                            Matches("Either 'Foo' or 'Foos' required."));
+    });
+    onContext(createYaml("Foo: 81"), [](ActorContext& c) {
+        REQUIRE_THROWS_WITH(
+            [&]() {
+                c.getPlural<TakesInt>(
+                    "Foo", "Foos", [](YAML::Node n) { return TakesInt{n.as<int>()}; });
+            }(),
+            Matches("Expected"));
+    });
+
+    onContext(createYaml("Foos: [733]"), [](ActorContext& c) {
+        REQUIRE(c.getPlural<int>("Foo", "Foos") == std::vector<int>{733});
+    });
+
+    onContext(createYaml("Foos: 73"), [](ActorContext& c) {
+        REQUIRE_THROWS_WITH([&]() { c.getPlural<int>("Foo", "Foos"); }(),
+                            Matches("'Foos' must be a sequence type."));
+    });
+
+    onContext(createYaml("Foo: 71"), [](ActorContext& c) {
+        REQUIRE(c.getPlural<int>("Foo", "Foos") == std::vector<int>{71});
+    });
+
+    onContext(createYaml("{ Foo: 9, Foos: 1 }"), [](ActorContext& c) {
+        REQUIRE_THROWS_WITH([&]() { c.getPlural<int>("Foo", "Foos"); }(),
+                            Matches("Can't have both 'Foo' and 'Foos'."));
+    });
+
+    onContext(createYaml("Number: 7"), [](ActorContext& c) {
+        REQUIRE_THROWS_WITH([&]() { c.getPlural<int>("Number", "Numbers"); }(),
+                            Matches("Can't have both 'Number' and 'Numbers'."));
+    });
+
+    onContext(createYaml("Numbers: [3, 4, 5]"), [](ActorContext& c) {
+        REQUIRE(c.getPlural<int>("Number", "Numbers") == std::vector<int>{3, 4, 5});
+    });
+}
+
+TEST_CASE("Configuration cascades to nested context types") {
+    auto yaml = YAML::Load(R"(
+SchemaVersion: 2018-07-01
+Database: test
+Actors:
+- Name: Actor1
+  Type: Op
+  Collection: mycoll
+  Phases:
+  - Operation: Nop
+
+  - Operation: Insert
+    Database: test3
+    Collection: mycoll2
+
+- Name: Actor2
+  Type: Op
+  Database: test2
+    )");
+
+    SECTION("ActorContext inherits from WorkloadContext") {
+        onContext(yaml, [](ActorContext& actorContext) {
+            const auto& workloadContext = actorContext.workload();
+            REQUIRE(workloadContext.get_noinherit<std::string>("Database") == "test");
+            REQUIRE(workloadContext.get<std::string>("Database") == "test");
+
+            const auto actorName = actorContext.get_noinherit<std::string>("Name");
+            REQUIRE((actorName == "Actor1" || actorName == "Actor2"));
+
+            if (actorName == "Actor1") {
+                REQUIRE(actorContext.get_noinherit<std::string, false>("Database") == std::nullopt);
+
+                REQUIRE_THROWS_WITH(
+                    ([&]() { actorContext.get_noinherit<std::string, true>("Database"); })(),
+                    Matches(R"(Invalid key \[Database\] at path(.*\n*)*)"));
+
+                REQUIRE(actorContext.get<std::string>("Database") == "test");
+            } else if (actorName == "Actor2") {
+                REQUIRE(actorContext.get_noinherit<std::string>("Database") == "test2");
+                REQUIRE(actorContext.get<std::string>("Database") == "test2");
+            }
+        });
+    }
+
+    SECTION("PhaseContext inherits from ActorContext") {
+        onContext(yaml, [](ActorContext& actorContext) {
+            const auto actorName = actorContext.get_noinherit<std::string>("Name");
+            REQUIRE((actorName == "Actor1" || actorName == "Actor2"));
+
+            if (actorName == "Actor1") {
+                REQUIRE(actorContext.get_noinherit<std::string>("Collection") == "mycoll");
+                REQUIRE(actorContext.get<std::string>("Collection") == "mycoll");
+
+                for (auto&& [phase, config] : actorContext.phases()) {
+                    REQUIRE((phase == 0 || phase == 1));
+
+                    if (phase == 0) {
+                        REQUIRE(config->get_noinherit<std::string, false>("Collection") ==
+                                std::nullopt);
+
+                        const auto* rawConfig = config.get();
+                        REQUIRE_THROWS_WITH(
+                            ([&]() {
+                                rawConfig->get_noinherit<std::string, true>("Collection");
+                            })(),
+                            Matches(R"(Invalid key \[Collection\] at path(.*\n*)*)"));
+
+                        REQUIRE(config->get<std::string>("Collection") == "mycoll");
+                    } else if (phase == 1) {
+                        REQUIRE(config->get_noinherit<std::string>("Collection") == "mycoll2");
+                        REQUIRE(config->get<std::string>("Collection") == "mycoll2");
+                    }
+                }
+            }
+        });
+    }
+
+    SECTION("PhaseContext inherits from WorkloadContext transitively") {
+        onContext(yaml, [](ActorContext& actorContext) {
+            const auto actorName = actorContext.get_noinherit<std::string>("Name");
+            REQUIRE((actorName == "Actor1" || actorName == "Actor2"));
+
+            if (actorName == "Actor1") {
+                for (auto&& [phase, config] : actorContext.phases()) {
+                    REQUIRE((phase == 0 || phase == 1));
+
+                    if (phase == 0) {
+                        REQUIRE(config->get_noinherit<std::string, false>("Database") ==
+                                std::nullopt);
+
+                        const auto* rawConfig = config.get();
+                        REQUIRE_THROWS_WITH(
+                            ([&]() { rawConfig->get_noinherit<std::string, true>("Database"); })(),
+                            Matches(R"(Invalid key \[Database\] at path(.*\n*)*)"));
+
+                        REQUIRE(config->get<std::string>("Database") == "test");
+                    } else if (phase == 1) {
+                        REQUIRE(config->get_noinherit<std::string>("Database") == "test3");
+                        REQUIRE(config->get<std::string>("Database") == "test3");
+                    }
+                }
+            }
+        });
+    }
+
+    SECTION("Nested contexts can have different types for the same named key") {
+        auto yaml = YAML::Load(R"(
+SchemaVersion: 2018-07-01
+MiscField: {a: b}
+Actors:
+- Name: Actor
+  Type: Op
+  MiscField: c
+  Phases:
+  - MiscField: [1, 2, 3]
+    )");
+
+        onContext(yaml, [](ActorContext& actorContext) {
+            const auto& workloadContext = actorContext.workload();
+
+            REQUIRE(workloadContext.get_noinherit<std::map<std::string, std::string>>(
+                        "MiscField") == std::map<std::string, std::string>{{"a", "b"}});
+            REQUIRE(workloadContext.get<std::map<std::string, std::string>>("MiscField") ==
+                    std::map<std::string, std::string>{{"a", "b"}});
+
+            const auto actorName = actorContext.get_noinherit<std::string>("Name");
+            REQUIRE(actorName == "Actor");
+
+            REQUIRE(actorContext.get_noinherit<std::string>("MiscField") == "c");
+            REQUIRE(actorContext.get<std::string>("MiscField") == "c");
+
+            REQUIRE_THROWS_WITH(
+                ([&]() {
+                    actorContext.get_noinherit<std::map<std::string, std::string>, true>(
+                        "MiscField");
+                })(),
+                Matches(R"(Bad conversion of \[c\] to(.*\n*)*)"));
+            REQUIRE_THROWS_WITH(([&]() {
+                                    actorContext.get<std::map<std::string, std::string>, true>(
+                                        "MiscField");
+                                })(),
+                                Matches(R"(Bad conversion of \[c\] to(.*\n*)*)"));
+
+            for (auto&& [phase, config] : actorContext.phases()) {
+                REQUIRE(phase == 0);
+
+                REQUIRE(config->get_noinherit<std::vector<int>>("MiscField") ==
+                        std::vector<int>{1, 2, 3});
+                REQUIRE(config->get<std::vector<int>>("MiscField") == std::vector<int>{1, 2, 3});
+
+                const auto* rawConfig = config.get();
+                REQUIRE_THROWS_WITH(
+                    ([&]() {
+                        rawConfig->get_noinherit<std::map<std::string, std::string>, true>(
+                            "MiscField");
+                    })(),
+                    Matches(R"(Bad conversion of \[\[1, 2, 3\]\] to(.*\n*)*)"));
+                REQUIRE_THROWS_WITH(([&]() {
+                                        rawConfig->get<std::map<std::string, std::string>, true>(
+                                            "MiscField");
+                                    })(),
+                                    Matches(R"(Bad conversion of \[\[1, 2, 3\]\] to(.*\n*)*)"));
+                REQUIRE_THROWS_WITH(
+                    ([&]() { rawConfig->get_noinherit<std::string, true>("MiscField"); })(),
+                    Matches(R"(Bad conversion of \[\[1, 2, 3\]\] to(.*\n*)*)"));
+                REQUIRE_THROWS_WITH(([&]() { rawConfig->get<std::string, true>("MiscField"); })(),
+                                    Matches(R"(Bad conversion of \[\[1, 2, 3\]\] to(.*\n*)*)"));
+            }
+        });
+    }
+}
+
+TEST_CASE("If no producer exists for an actor, then we should throw an error") {
+    genny::metrics::Registry metrics;
+    genny::Orchestrator orchestrator{};
+
+    auto cast = Cast{
+        {"Foo", std::make_shared<NoOpProducer>()},
+    };
+
+    auto yaml = YAML::Load(R"(
+    SchemaVersion: 2018-07-01
+    Database: test
+    Actors:
+    - Name: Actor1
+      Type: Bar
+    )");
+
+    SECTION("Incorrect type value inputted") {
+        auto test = [&]() {
+            WorkloadContext w(yaml, metrics, orchestrator, mongoUri.data(), cast);
+        };
+        REQUIRE_THROWS_WITH(
+            test(), Matches(R"(Unable to construct actors: No producer for 'Bar'(.*\n*)*)"));
+    }
 }

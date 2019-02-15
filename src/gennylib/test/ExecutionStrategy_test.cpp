@@ -1,21 +1,36 @@
-#include "test.h"
-
-#include "ActorHelper.hpp"
+// Copyright 2019-present MongoDB Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <iostream>
-
-#include <gennylib/ExecutionStrategy.hpp>
-#include <gennylib/PhaseLoop.hpp>
-#include <gennylib/context.hpp>
 
 #include <boost/log/trivial.hpp>
 
 #include <yaml-cpp/yaml.h>
 
-#include <mongocxx/exception/operation_exception.hpp>
 #include <mongocxx/exception/server_error_code.hpp>
 #include <mongocxx/instance.hpp>
 #include <mongocxx/pool.hpp>
+
+#include <loki/ScopeGuard.h>
+
+#include <gennylib/ExecutionStrategy.hpp>
+#include <gennylib/MongoException.hpp>
+#include <gennylib/PhaseLoop.hpp>
+#include <gennylib/context.hpp>
+#include <testlib/ActorHelper.hpp>
+
+#include <testlib/helpers.hpp>
 
 namespace Catchers = Catch::Matchers;
 
@@ -25,42 +40,57 @@ public:
     struct PhaseState {
         PhaseState(const PhaseContext& context)
             : options{ExecutionStrategy::getOptionsFrom(context, "ExecutionStrategy")},
-              throwCount{context.get<int, false>("ThrowCount").value_or(0)} {}
+              throwCount{context.get<int, false>("ThrowCount").value_or(0)},
+              shouldThrow{context.get<bool, false>("ShouldThrow").value_or(false)} {}
 
         ExecutionStrategy::RunOptions options;
         signed long long throwCount;
+        bool shouldThrow;
     };
+
+    using Exception = genny::MongoException;
+
+    static constexpr auto kErrorMessage = "Testing ExecutionStrategy catching";
 
 public:
     StrategyActor(ActorContext& context)
-        : Actor(context), strategy{context, StrategyActor::id(), "simple"}, _loop{context} {}
+        : Actor(context),
+          strategy{context.operation("sipmle", StrategyActor::id())},
+          _loop{context} {}
 
     void run() override {
         for (auto&& config : _loop) {
-            auto throwCount = config->throwCount;
-            strategy.run(
-                [&]() {
-                    if (throwCount > 0) {
-                        --throwCount;
-                        throw mongocxx::operation_exception(mongocxx::make_error_code({}),
-                                                            "Testing ExecutionStrategy catching.");
-                    }
+            if (config->shouldThrow) {
+                REQUIRE_THROWS_AS(runOnce(*config, config.phaseNumber()), Exception);
+            } else {
+                REQUIRE_NOTHROW(runOnce(*config, config.phaseNumber()));
+            }
+        }
+    }
 
-                    ++goodRuns;
-                },
-                config->options);
-
+    void runOnce(PhaseState& state, PhaseNumber phase) {
+        auto guard = Loki::MakeGuard([&]() {
             auto attempts = strategy.lastResult().numAttempts;
-            BOOST_LOG_TRIVIAL(info)
-                << "Phase " << config.phaseNumber() << ": tried " << attempts << " times";
+            BOOST_LOG_TRIVIAL(info) << "Phase " << phase << ": tried " << attempts << " times";
             allRuns += attempts;
 
             if (!strategy.lastResult().wasSuccessful) {
-                BOOST_LOG_TRIVIAL(info) << "Phase " << config.phaseNumber() << ": failed";
+                BOOST_LOG_TRIVIAL(info) << "Phase " << phase << ": failed";
                 ++failedRuns;
             }
-        }
-    };
+        });
+
+        strategy.run(
+            [&](metrics::OperationContext&) {
+                if (state.throwCount > 0) {
+                    --state.throwCount;
+                    throw Exception(kErrorMessage);
+                }
+
+                ++goodRuns;
+            },
+            state.options);
+    }
 
     static std::string_view defaultName() {
         return "Strategy";
@@ -158,6 +188,36 @@ Actors:
         elf.runDefaultAndVerify(verifyFun);
     }
 
+    SECTION("Test default exception rethrow") {
+        YAML::Node config = YAML::Load(R"(
+SchemaVersion: 2018-07-01
+Actors:
+- Name: Simple
+  Type: Strategy
+  Phases:
+    - Phase: 0
+      ThrowCount: 1
+      ShouldThrow: True
+      ExecutionStrategy:
+        ThrowOnFailure: True
+        Retries: 0
+)");
+
+        auto producer = std::make_shared<genny::DefaultActorProducer<genny::test::StrategyActor>>();
+        genny::ActorHelper elf(config, 1, {{"Strategy", producer}});
+
+        auto verifyFun = [&](const genny::WorkloadContext& context) {
+            auto actor = genny::test::extractActor(context.actors()[0]);
+
+            REQUIRE(actor->allRuns == 1);
+            REQUIRE(actor->failedRuns == 1);
+            REQUIRE(actor->goodRuns == 0);
+            REQUIRE(!actor->strategy.lastResult().wasSuccessful);
+        };
+
+        elf.runDefaultAndVerify(verifyFun);
+    }
+
     SECTION("Test retries and failure reset") {
         YAML::Node config = YAML::Load(R"(
 SchemaVersion: 2018-07-01
@@ -191,7 +251,7 @@ Actors:
         run += kOverthrows;
         ++failed;
 
-        // Throw exactly as many times as we can catch (3 runs, 2 caught, 0 failed)
+        // Throw exactly as many times as we can catch
         constexpr size_t kMatchedThrows = 2;
         yamlSimpleActor["Phases"][2]["ThrowCount"] = kMatchedThrows;
         yamlSimpleActor["Phases"][2]["ExecutionStrategy"]["Retries"] = kMatchedThrows;

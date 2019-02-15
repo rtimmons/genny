@@ -1,8 +1,23 @@
-#include "test.h"
+// Copyright 2019-present MongoDB Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include <testlib/MongoTestFixture.hpp>
+
+#include <testlib/helpers.hpp>
 
 #include <gennylib/context.hpp>
-#include <gennylib/metrics.hpp>
-#include <log.hh>
+#include <metrics/metrics.hpp>
 
 using namespace genny;
 
@@ -33,8 +48,7 @@ public:
           _registration{globalCast().registerCustom(_producer)},
           _node{createWorkloadYaml(name, actorYaml)},
           _registry{},
-          _orchestratorGauge{_registry.gauge("Genny.Orchestrator")},
-          _orchestrator{_orchestratorGauge},
+          _orchestrator{},
           _workloadContext{
               _node, _registry, _orchestrator, "mongodb://localhost:27017", genny::globalCast()} {}
 
@@ -51,7 +65,6 @@ private:
     Cast::Registration _registration;
     YAML::Node _node;
     metrics::Registry _registry;
-    metrics::Gauge _orchestratorGauge;
     Orchestrator _orchestrator;
     WorkloadContext _workloadContext;
 };

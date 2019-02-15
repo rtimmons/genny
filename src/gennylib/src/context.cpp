@@ -1,3 +1,17 @@
+// Copyright 2019-present MongoDB Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <gennylib/context.hpp>
 
 #include <memory>
@@ -8,50 +22,38 @@
 #include <mongocxx/uri.hpp>
 
 #include <gennylib/Cast.hpp>
-#include <gennylib/PoolFactory.hpp>
 
 namespace genny {
 
-WorkloadContext::WorkloadContext(YAML::Node node,
+WorkloadContext::WorkloadContext(const YAML::Node& node,
                                  metrics::Registry& registry,
                                  Orchestrator& orchestrator,
                                  const std::string& mongoUri,
-                                 const Cast& cast)
-    : _node{std::move(node)}, _registry{&registry}, _orchestrator{&orchestrator} {
+                                 const Cast& cast,
+                                 v1::PoolManager::OnCommandStartCallback apmCallback)
+    : v1::ConfigNode(node),
+      _registry{&registry},
+      _orchestrator{&orchestrator},
+      _rateLimiters{10},
+      _poolManager{mongoUri, apmCallback} {
+
     // This is good enough for now. Later can add a WorkloadContextValidator concept
     // and wire in a vector of those similar to how we do with the vector of Producers.
-    if (get_static<std::string>(_node, "SchemaVersion") != "2018-07-01") {
+    if (this->get_noinherit<std::string>("SchemaVersion") != "2018-07-01") {
         throw InvalidConfigurationException("Invalid schema version");
     }
 
     // Make sure we have a valid mongocxx instance happening here
     mongocxx::instance::current();
 
-    // TODO: make this optional and default to mongodb://localhost:27017
-    auto poolFactory = PoolFactory(mongoUri);
-
-    auto queryOpts =
-        get_static<std::map<std::string, std::string>, false>(node, "Pool", "QueryOptions");
-    if (queryOpts) {
-        poolFactory.setOptions(PoolFactory::kQueryOption, *queryOpts);
-    }
-
-    auto accessOpts =
-        get_static<std::map<std::string, std::string>, false>(node, "Pool", "AccessOptions");
-    if (accessOpts) {
-        poolFactory.setOptions(PoolFactory::kAccessOption, *accessOpts);
-    }
-
-    _clientPool = poolFactory.makePool();
-
     // Make a bunch of actor contexts
-    for (const auto& actor : get_static(node, "Actors")) {
+    for (const auto& actor : this->get_noinherit("Actors")) {
         _actorContexts.emplace_back(std::make_unique<genny::ActorContext>(actor, *this));
     }
 
     // Default value selected from random.org, by selecting 2 random numbers
     // between 1 and 10^9 and concatenating.
-    _rng.seed(get_static<int, false>(node, "RandomSeed").value_or(269849313357703264));
+    _rng.seed(this->get_noinherit<int, false>("RandomSeed").value_or(269849313357703264));
 
     for (auto& actorContext : _actorContexts) {
         for (auto&& actor : _constructActors(cast, actorContext)) {
@@ -73,13 +75,35 @@ ActorVector WorkloadContext::_constructActors(const Cast& cast,
         std::ostringstream stream;
         stream << "Unable to construct actors: No producer for '" << name << "'." << std::endl;
         cast.streamProducersTo(stream);
-        throw std::out_of_range(stream.str());
+        throw InvalidConfigurationException(stream.str());
     }
 
     for (auto&& actor : producer->produce(*actorContext)) {
         actors.emplace_back(std::forward<std::unique_ptr<Actor>>(actor));
     }
     return actors;
+}
+
+mongocxx::pool::entry WorkloadContext::client(const std::string& name, size_t instance) {
+    return _poolManager.client(name, instance, *this);
+}
+
+v1::GlobalRateLimiter* WorkloadContext::getRateLimiter(const std::string& name,
+                                                       const RateSpec& spec) {
+    if (_rateLimiters.count(name) == 0) {
+        _rateLimiters.emplace(std::make_pair(name, std::make_unique<v1::GlobalRateLimiter>(spec)));
+    }
+    auto rl = _rateLimiters[name].get();
+    rl->addUser();
+    return rl;
+}
+
+DefaultRandom WorkloadContext::createRNG() {
+    if (_done) {
+        throw InvalidConfigurationException(
+            "Tried to create a random number generator after construction");
+    }
+    return DefaultRandom{_rng()};
 }
 
 // Helper method to convert Phases:[...] to PhaseContexts
@@ -115,14 +139,8 @@ std::unordered_map<PhaseNumber, std::unique_ptr<PhaseContext>> ActorContext::con
     return out;
 }
 
-mongocxx::pool::entry ActorContext::client() {
-    auto entry = _workload->_clientPool->try_acquire();
-    if (!entry) {
-        throw InvalidConfigurationException("Failed to acquire an entry from the client pool.");
-    }
-    return std::move(*entry);
-}
-
+// this could probably be made into a free-function rather than an
+// instance method
 bool PhaseContext::_isNop() const {
     auto hasNoOp = get<bool, false>("Nop").value_or(false)  //
         || get<bool, false>("nop").value_or(false)          //
@@ -157,6 +175,21 @@ bool PhaseContext::_isNop() const {
         || (opName == "nop")   //
         || (opName == "NoOp")  //
         || (opName == "noop");
+}
+
+bool PhaseContext::isNop() const {
+    auto isNop = _isNop();
+
+    // Check to make sure we haven't broken our rules
+    if (isNop && _node.size() > 1) {
+        if (_node.size() != 2 || !_node["Phase"]) {
+            throw InvalidConfigurationException(
+                "'Nop' cannot be used with any other keywords except 'Phase'. Check YML "
+                "configuration.");
+        }
+    }
+
+    return isNop;
 }
 
 }  // namespace genny

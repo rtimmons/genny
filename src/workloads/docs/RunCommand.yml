@@ -1,0 +1,49 @@
+SchemaVersion: 2018-07-01
+Owner: "@mongodb/stm"
+
+Actors:
+- Name: ServerStatusInsertFind
+  Type: RunCommand
+  Threads: 1
+  Database: test
+  Phases:
+  - Duration: 5 minutes
+    Operations:
+    - OperationMetricsName: ServerStatus
+      OperationName: RunCommand
+      OperationCommand:
+        serverStatus: 1
+    - OperationName: RunCommand
+      OperationCommand:
+        insert: myCollection
+        documents: [{name: {^RandomString: {length: {^RandomInt: {min: 2, max: 5}}}}, rating: 10, address: someAddress, cuisine: italian}]
+    - OperationMetricsName: Find
+      OperationCommand:
+        find: restaurants
+        filter: { rating: { $gte: 9 }, cuisine: italian }
+        projection: { name: 1, rating: 1, address: 1 }
+        sort: { name: 1 }
+        limit: 5
+      OperationName: RunCommand
+- Name: CurrentOp
+  Type: AdminCommand
+  Threads: 1
+  Phases:
+  - Repeat: 5
+    Operation:
+      OperationMetricsName: CurrentOp
+      OperationName: RunCommand
+      OperationCommand:
+        currentOp: 1
+- Name: Stepdown
+  Type: AdminCommand
+  Threads: 1
+  Phases:
+  - Phase: 0
+    Operation:
+      OperationMetricsName: Stepdown
+      OperationName: RunCommand
+      OperationCommand:
+        replSetStepDown: 60
+      OperationAwaitStepdown: yes
+

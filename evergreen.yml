@@ -45,7 +45,7 @@
 ##                ⚡️ Variants ⚡️
 
 ignore:
-    - "*.md" # don't schedule tests if a commit only changes markdown files
+- "*.md" # don't schedule tests if a commit only changes markdown files
 
 buildvariants:
 
@@ -55,20 +55,55 @@ buildvariants:
   run_on:
   - archlinux-test
   expansions:
-    cmake_cxx_flags: -pthread
+    distro: archlinux
   tasks:
-  - name: t_test
+  - name: tg_compile_and_test
+  - name: t_push
 
-# TODO: TIG-1056 the OS X image doesn't have a recent CMake or C++ compiler
-# - name: macos-1012
-#   display_name: OS X Sierra
-#   modules: ~
-#   run_on:
-#   - macos-1012
-#   expansions:
-#     cmake_cxx_flags: ""
-#   tasks:
-#   - name: t_test
+- name: amazon2
+  display_name: Amazon Linux 2
+  modules: ~
+  run_on:
+  - amazon2-build
+  expansions:
+    distro: amazon2
+    mongodb_archive_url:
+      https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-amazon2-4.1.7.tgz
+  tasks:
+  - name: tg_compile_and_test_with_server
+  - name: t_push
+
+- name: rhel70
+  display_name: RHEL 7
+  modules: ~
+  expansions:
+    distro: rhel70
+  run_on:
+  - rhel70
+  tasks:
+  - name: t_compile
+  - name: t_push
+
+- name: ubuntu1804
+  display_name: Ubuntu 18.04
+  modules: ~
+  expansions:
+    distro: ubuntu1804
+  run_on:
+  - ubuntu1804-build
+  tasks:
+  - name: t_compile
+  - name: t_push
+
+- name: macos-1014
+  display_name: macOS Mojave
+  modules: ~
+  run_on:
+  - macos-1014
+  tasks:
+  - name: t_rm_toolchain_dir_mac
+  - name: t_compile
+  - name: t_push
 
 
 ##                ⚡️ Tasks ⚡️
@@ -77,8 +112,27 @@ tasks:
 - name: t_compile
   commands:
   - func: f_fetch_source
-  - func: f_build_grpc
   - func: f_compile
+  - func: f_dry_run_workloads
+  - func: f_push_patch
+    vars:
+      display_name: Genny
+      short_name: genny
+      install_dir: dist
+- name: t_rm_toolchain_dir_mac
+  commands:
+  - func: f_rm_toolchain_dir_mac
+- name: t_push
+  depends_on: t_compile
+  patchable: no
+  commands:
+  - func: f_push_official
+    vars:
+      display_name: Genny
+      short_name: genny
+
+- name: t_mongo_server
+  commands:
   - func: f_checkout_mongodb
 
 - name: t_python_test
@@ -117,22 +171,34 @@ tasks:
 ##                ⚡️ Task Groups ⚡️
 
 task_groups:
-- name: t_test
+
+- &a_compile_and_test
+  name: tg_compile_and_test
   max_hosts: 1
   setup_task:
   - func: f_remove_test_results_files
   teardown_task:
-  # Attaching results is prohibited in "teardown_group". So we call it in "teardown_task"
-  # but make the result file optional.
+  # Attaching results is prohibited in "teardown_group".
+  # So we call it in "teardown_task" but make the result file optional.
   - func: f_report_test_results
   - func: f_remove_test_results_files
   tasks:
-  # Rely on implicit dependencies in task_groups where tasks are executed in the order they're
-  # defined. Tasks with explicit "depends_on" tasks may conflict with task_group's implicit
-  # dependency, causing unexpected behavior.
+  # Rely on implicit dependencies in task_groups where tasks are executed
+  # in the order they're defined. Tasks with explicit "depends_on" tasks
+  # may conflict with task_group's implicit dependency, causing
+  # unexpected behavior.
   #
-  # For this task group, the implicit dependency is that t_*_test has to run after t_compile.
+  # For this task group, the implicit dependency is that t_*_test has to
+  # run after t_compile.
   - t_compile
+  - t_python_test
+  - t_cmake_test
+
+- <<: *a_compile_and_test
+  name: tg_compile_and_test_with_server
+  tasks:
+  - t_compile
+  - t_mongo_server
   - t_python_test
   - t_cmake_test
   - t_integration_test_standalone
@@ -151,77 +217,155 @@ functions:
       directory: src
 
   ##
-  # Download the mongodb binary and then clone and checkout the appropriate mongodb repository branch
-  # that contains the intended gennylib test case (SERVER-38646). Also installs resmoke dependencies.
+  # Download the mongodb binary and then clone and checkout the appropriate
+  # mongodb repository branch that contains the intended gennylib test case
+  # (SERVER-38646). Also installs resmoke dependencies.
+  #
+  # Expansions:
+  #   mongodb_archive_url: url to download pre-compiled mongo from
   ##
   f_checkout_mongodb:
+  - command: subprocess.exec
+    params:
+      working_dir: src
+      binary: /bin/bash
+      args:
+        - "${workdir}/src/scripts/get-mongo-source.sh"
   - command: shell.exec
     params:
-      working_dir: src/build
+      working_dir: src/build/mongo
+      shell: /bin/bash
       script: |
-        yes | pacman -S mongodb
-        git clone git@github.com:mongodb/mongo.git mongo
+        set -euo pipefail
+        curl -LSs "${mongodb_archive_url}" -o mongodb.tgz
+        tar --strip-components=1 -zxvf mongodb.tgz
 
-        pushd mongo
-          git checkout 6734c12d17dd4c0e2738a47feb7114221d6ba66d
-        popd
-
-        virtualenv -p python2 venv
-        source venv/bin/activate
-        python -m pip install -r mongo/etc/pip/evgtest-requirements.txt
+  f_rm_toolchain_dir_mac:
+    - command: shell.exec
+      params:
+        shell: bash
+        script: |
+          rm -rf /data/mci/gennytoolchain
 
   ##
-  # Compile gRPC. This script should be synchronized with DSI's compilation sript for Genny:
-  # https://github.com/10gen/dsi/blob/master/configurations/workload_setup/workload_setup.common.yml
-  # (URL valid as of 11/2018)
-  ##
-  f_build_grpc:
+  # Archive an installed library into a tarball and upload it with
+  # revision suffix.
+  #
+  # Expansions:
+  #  install_dir: The directory in which this dependency was installed
+  #  short_name: The name for the folder and prefix for the tarball to push
+  #  display_name: The name to show in evergreen
+  #  aws_key: aws key
+  #  aws_secret: aws secret key
+  #  project: evergreen project name (genny)
+  #  build_id: evergreen build id
+  ###
+  f_push_patch:
+  - command: archive.targz_pack
+    params:
+      source_dir: ${install_dir|dist}
+      target: ${short_name}.tgz
+      include:
+      - "./**"
   - command: shell.exec
     params:
-      working_dir: src/build
+      working_dir: .
+      shell: bash
       script: |
         set -o errexit
-        set -o pipefail
-        set -o nounset
+        # Make sure we have a file, give more info
+        find . -iname *.tgz -exec stat {} \;
+  - command: s3.put
+    params:
+      aws_key: ${aws_key}
+      aws_secret: ${aws_secret}
+      local_file: ${short_name}.tgz
+      remote_file: ${project}/patches/${build_id}/${short_name}.tgz
+      bucket: mciuploads
+      permissions: public-read
+      content_type: ${content_type|application/gzip}
+      display_name: ${display_name} Patch
 
-        rm -rf * # Remove grpc and any cmake config copied up from runner
-        git clone --recurse-submodules https://github.com/grpc/grpc.git
-
-        pushd grpc
-        git checkout b79462f186cc22550bc8d53a00ae751f50d194f5
-
-        # Work around https://github.com/grpc/grpc/issues/16675 by checking out a newer commit.
-        pushd third_party/boringssl
-        git checkout 9edbc7ff9f56dff801a49f5ecb15ee06718b995c
-        popd
-
-        mkdir cmake-build
-        pushd cmake-build
-        cmake ..
-        make -j$(nproc)
+  ##
+  # Copy the library tarball for a given revision to the official path
+  #
+  # Expansions:
+  #  short_name: The name for the folder and prefix for the tarball to push
+  #  display_name: The name to show in evergreen
+  #  aws_key: aws key
+  #  aws_secret: aws secret key
+  #  project: evergreen project name (genny)
+  #  build_id: evergreen build id
+  #  build_variant: build variant (used in s3 path)
+  ###
+  f_push_official:
+  - command: s3.get
+    params:
+      aws_key: ${aws_key}
+      aws_secret: ${aws_secret}
+      local_file: ${short_name}.tgz
+      remote_file: ${project}/patches/${build_id}/${short_name}.tgz
+      bucket: mciuploads
+      permissions: public-read
+      content_type: ${content_type|application/gzip}
+  - command: s3.put
+    params:
+      aws_key: ${aws_key}
+      aws_secret: ${aws_secret}
+      local_file: ${short_name}.tgz
+      remote_file:
+        ${project}/${short_name}/${short_name}-${build_variant}-${revision}.tgz
+      bucket: mciuploads
+      permissions: public-read
+      content_type: ${content_type|application/gzip}
+      display_name: "${display_name} - ${revision}"
+  - command: s3.put
+    params:
+      aws_key: ${aws_key}
+      aws_secret: ${aws_secret}
+      local_file: ${short_name}.tgz
+      remote_file: ${project}/${short_name}/${short_name}-${build_variant}.tgz
+      bucket: mciuploads
+      permissions: public-read
+      content_type: ${content_type|application/gzip}
+      display_name: ${display_name}
 
   ##
   # Compile the project in src/build.
-  #
-  # Expansions:
-  #  cmake_cxx_flags: sent to cmake as `-DCMAKE_CXX_FLAGS`
-  ###
+  ##
   f_compile:
   - command: shell.exec
     params:
-      working_dir: src/build
+      working_dir: src
+      shell: bash
       script: |
         set -o errexit
         set -o pipefail
-        set -o nounset
 
-        # Add paths to gRPC and protobuf.
-        cwd=$(pwd)
-        export LIBRARY_PATH="$cwd/grpc/cmake-build/:$cwd/grpc/cmake-build/third_party/protobuf"
-        export CPLUS_INCLUDE_PATH="$cwd/grpc/include:$cwd/grpc/third_party/protobuf/src"
+        # for python3
+        export PATH=/opt/mongodbtoolchain/v3/bin:$PATH
 
-        cmake -DCMAKE_CXX_FLAGS="${cmake_cxx_flags}" ..
-        make -j$(nproc)
+        export DEVELOPER_DIR="/Applications/Xcode10.1.app"
+
+        ./scripts/lamp \
+          -d=${distro|not-linux} \
+          -DENABLE_JASPER:BOOL=ON \
+          -DGENNY_INSTALL_DIR:PATH=${workdir}/dist \
+          -DGENNY_INSTALL_SSL:BOOL=ON
+
+  ##
+  # Runs each workload as a dry run
+  # Requires f_compile to have been run first.
+  ##
+  f_dry_run_workloads:
+  - command: subprocess.exec
+    params:
+      working_dir: .
+      binary: /bin/bash
+      args:
+      - ${workdir}/src/scripts/dry-run-workloads.sh
+      env:
+        GENNY: ${workdir}/dist/bin/genny
 
   ##
   # Runs tests via ctest.
@@ -231,59 +375,32 @@ functions:
   - command: shell.exec
     params:
       continue_on_err: true
-      working_dir: src/build
+      working_dir: src
+      shell: bash
       script: |
         set -o errexit
         set -o pipefail
         set -o nounset
 
-        ctest --label-exclude "(standalone|sharded|single_node_replset|three_node_replset)"
+        # for python3
+        export PATH=/opt/mongodbtoolchain/v3/bin:$PATH
+
+        ./scripts/lamp cmake-test
 
   ##
   # Runs tests via resmoke.
   # Requires f_compile to have been run first.
   ##
   f_resmoke_test:
-  - command: shell.exec
+  - command: subprocess.exec
     params:
       continue_on_err: true
       working_dir: src
-      script: |
-        set -o errexit
-        set -o pipefail
-        # set -o nounset # the "activate" script has an unbound variable
-
-        source build/venv/bin/activate
-
-        # We rely on catch2 to report test failures, but it doesn't always do so.
-        # See https://github.com/catchorg/Catch2/issues/1210
-        # As a workaround, we generate a dummy report with a failed test that is deleted if resmoke
-        # succeeds.
-
-        cat << EOF >> "build/sentinel.junit.xml"
-        <?xml version="1.0" encoding="UTF-8"?>
-        <testsuites>
-         <testsuite name="resmoke_failure_sentinel" errors="0" failures="1" tests="1" hostname="tbd" time="1.0" timestamp="2019-01-01T00:00:00Z">
-          <testcase classname="resmoke_failure_sentinel" name="Dummy testcase to signal that resmoke failed because a report may not be generated" time="1.0">
-           <failure message="resmoke did not exit cleanly, see task log for detail" type="">
-           </failure>
-          </testcase>
-          <system-out/>
-          <system-err/>
-         </testsuite>
-        </testsuites>
-        EOF
-
-        # The tests themselves do the reporting instead of using resmoke.
-        python build/mongo/buildscripts/resmoke.py \
-               --suite src/resmokeconfig/${resmoke_suite} \
-               --mongod mongod \
-               --mongo mongo \
-               --mongos mongos
-
-        # Remove the sentinel report if resmoke succeeds. This line won't be executed if
-        # resmoke fails because we've set errexit on this shell.
-        rm build/sentinel.junit.xml
+      binary: /bin/bash
+      args:
+      - ${workdir}/src/scripts/run-resmoke.sh
+      env:
+        RESMOKE_SUITE: ${resmoke_suite}
 
   ##
   # Runs python nosetests.
@@ -293,17 +410,20 @@ functions:
     params:
       continue_on_err: true
       working_dir: src/src/python
+      shell: bash
       script: |
         set -o errexit
         set -o pipefail
         set -o nounset
 
-        python setup.py nosetests
+        python3 setup.py nosetests
 
   ##
-  # Reports test results to evergreen API. If you add a new file to this list, then you should also
-  # add it to the `f_remove_test_results_files` function to ensure it is cleaned up between tasks in
-  # the task group.
+  # Reports test results to evergreen API.
+  #
+  # If you add a new file to this list, then you should also
+  # add it to the `f_remove_test_results_files` function to
+  # ensure it is cleaned up between tasks in the task group.
   ##
   f_report_test_results:
   - command: attach.xunit_results
@@ -325,6 +445,7 @@ functions:
   f_remove_test_results_files:
   - command: shell.exec
     params:
+      shell: bash
       script: |
         set -o errexit
         set -o pipefail
