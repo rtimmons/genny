@@ -16,12 +16,46 @@
 #include <iostream>
 #include <optional>
 
+#include <bsoncxx/builder/basic/array.hpp>
+
 #include <gennylib/version.hpp>
 
 #include <driver/v1/DefaultDriver.hpp>
+#include <bsoncxx/builder/basic/array.hpp>
 
 
-int main(int argc, char** argv) {
+/*
+         return Event(random.randint(0, 5),
+                     random.randint(0, 1000),
+                     random.randint(0, 5),
+                     random.randint(0, 1000),
+                     random.randint(0, 500),
+                     random.choice([0, 1]))
+ */
+int main(int argc, char**argv) {
+    using bsoncxx::builder::basic::kvp;
+    const unsigned long long HOW_MANY_EVENTS = 1;
+    std::ofstream output("t1", std::ios::out|std::ios::binary);
+    for(unsigned i = 0; i < HOW_MANY_EVENTS; ++i) {
+        auto arr = bsoncxx::builder::basic::make_array(
+            1,
+            500,
+            3,
+            500,
+            250,
+            1
+        );
+        const auto view = arr.view();
+        const auto data = view.data();
+        output << data;
+    }
+
+    std::cout << "Done" << std::endl;
+    output.close();
+    return EXIT_SUCCESS;
+}
+
+int omain(int argc, char** argv) {
     auto opts = genny::driver::DefaultDriver::ProgramOptions(argc, argv);
     if (opts.runMode == genny::driver::DefaultDriver::RunMode::kHelp) {
         auto v = std::make_optional(genny::getVersion());
