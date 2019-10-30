@@ -12,61 +12,40 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <optional>
 
 #include <bsoncxx/builder/basic/array.hpp>
 
-#include <gennylib/version.hpp>
-
-#include <driver/v1/DefaultDriver.hpp>
-#include <bsoncxx/builder/basic/array.hpp>
-
-
-/*
-         return Event(random.randint(0, 5),
-                     random.randint(0, 1000),
-                     random.randint(0, 5),
-                     random.randint(0, 1000),
-                     random.randint(0, 500),
-                     random.choice([0, 1]))
- */
-int main(int argc, char**argv) {
+int main(int argc, char** argv) {
     using bsoncxx::builder::basic::kvp;
-    const unsigned long long HOW_MANY_EVENTS = 1;
-    std::ofstream output("t1", std::ios::out|std::ios::binary);
-    for(unsigned i = 0; i < HOW_MANY_EVENTS; ++i) {
-        auto arr = bsoncxx::builder::basic::make_array(
+    const unsigned long long HOW_MANY_EVENTS = 5 * 1000 * 1000;
+    std::ofstream output("t1", std::ios::out | std::ios::binary);
+    const auto start = std::chrono::system_clock::now();
+    size_t written = 0;
+    for (unsigned i = 0; i < HOW_MANY_EVENTS; ++i) {
+        bsoncxx::array::value arr = bsoncxx::builder::basic::make_array(
+            // roughly 6 fields per event that we care about
             1,
             500,
             3,
             500,
             250,
-            1
-        );
-        const auto view = arr.view();
-        const auto data = view.data();
-        output << data;
+            1);
+        const std::uint8_t* data = arr.view().data();
+        const size_t length = arr.view().length();
+        written += length;
+        output.write((char*)data, length);
     }
+    const auto dur = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::system_clock::now() - start)
+                         .count();
 
-    std::cout << "Done" << std::endl;
+    std::cout << "Wrote " << HOW_MANY_EVENTS << " events (" << written << " bytes) after " << dur
+              << " milliseconds" << std::endl;
+    output.flush();
     output.close();
     return EXIT_SUCCESS;
-}
-
-int omain(int argc, char** argv) {
-    auto opts = genny::driver::DefaultDriver::ProgramOptions(argc, argv);
-    if (opts.runMode == genny::driver::DefaultDriver::RunMode::kHelp) {
-        auto v = std::make_optional(genny::getVersion());
-        // basically just a test that we're using c++17
-        std::cout << u8"\n🧞 Genny" << " Version " << v.value_or("ERROR") << u8" 💝🐹🌇⛔\n";
-        std::cout << opts.description << std::endl;
-        return 0;
-    }
-
-    genny::driver::DefaultDriver d;
-
-    auto code = d.run(opts);
-    return static_cast<int>(code);
 }
