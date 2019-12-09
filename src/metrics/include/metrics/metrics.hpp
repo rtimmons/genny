@@ -25,6 +25,16 @@
 #include <metrics/operation.hpp>
 #include <metrics/v1/passkey.hpp>
 
+
+#include <grpc/grpc.h>
+#include <grpcpp/channel.h>
+#include <grpcpp/client_context.h>
+#include <grpcpp/create_channel.h>
+#include <grpcpp/security/credentials.h>
+
+#include <poplarlib/collector.grpc.pb.h>
+
+
 namespace genny::metrics {
 
 /**
@@ -83,7 +93,10 @@ private:
 public:
     using clock = ClockSource;
 
-    explicit RegistryT() = default;
+    explicit RegistryT()
+    : _collector {poplar::PoplarEventCollector::NewStub(grpc::CreateChannel("localhost:50051", grpc::InsecureChannelCredentials()))},
+      _ops{}
+    {}
 
     OperationT<ClockSource> operation(std::string actorName, std::string opName, ActorId actorId) {
         auto& opsByType = this->_ops[actorName];
@@ -121,6 +134,7 @@ public:
 
 private:
     OperationsMap _ops;
+    std::unique_ptr<poplar::PoplarEventCollector::Stub> _collector;
 };
 
 }  // namespace v1
