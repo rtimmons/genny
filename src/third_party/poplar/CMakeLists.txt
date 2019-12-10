@@ -41,3 +41,9 @@ install(TARGETS  poplarlib
         ARCHIVE  DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY  DESTINATION ${CMAKE_INSTALL_LIBDIR}
         RUNTIME  DESTINATION ${CMAKE_INSTALL_BINDIR})  # This is for Windows
+
+add_executable(call-poplar
+    main.cpp
+)
+
+target_link_libraries(call-poplar poplarlib)
