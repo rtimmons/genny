@@ -15,16 +15,18 @@
 add_subdirectory(third_party)
 
 # keep in alpha order
+add_subdirectory(canaries)
 add_subdirectory(cast_core)
 add_subdirectory(driver)
 add_subdirectory(gennylib)
 add_subdirectory(metrics)
+add_subdirectory(phases)
 add_subdirectory(testlib)
 add_subdirectory(value_generators)
 add_subdirectory(workloads)
 
 # This makes the project importable from the build directory
-export(TARGETS value_generators metrics gennylib loki cast_core
+export(TARGETS value_generators metrics gennylib loki cast_core poplarlib
        FILE GennyLibraryConfig.cmake)
 
 # Below generates a cmake module so if you make install from this

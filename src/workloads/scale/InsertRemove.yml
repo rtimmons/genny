@@ -6,12 +6,19 @@ Owner: "@mongodb/product-perf"
 # document, indexed by an integer _id field. The actor records the latency of each insert and each remove.
 
 Actors:
-  - Name: InsertRemoveTest
-    Type: InsertRemove
-    Threads: 100
+- Name: InsertRemoveTest
+  Type: InsertRemove
+  Threads: 100
+  Phases:
+  - Collection: inserts
+    Duration: 3 minutes
     Database: test
-    Phases:
-      - Collection: inserts
-        Duration: 100 milliseconds
-      - Collection: inserts
-        Count: 179
+
+AutoRun:
+  Requires:
+    bootstrap:
+      mongodb_setup: 
+        - replica
+        - single-replica
+        - standalone
+        - shard

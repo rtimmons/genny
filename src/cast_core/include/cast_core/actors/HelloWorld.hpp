@@ -55,12 +55,12 @@ public:
     void run() override;
 
 private:
-    /** record data about each iteration */
-    metrics::Operation _operation;
-
-    /** constructed from each `Phase:` block in the `Actor:` block */
+    /**
+     * constructed from each `Phase:` block in the `Actor:` block
+     * @private
+     */
     struct PhaseConfig;
-    /** loops over each Phase and handles Duration/Repeat/Rate */
+    /** loops over each Phase and handles Duration/Repeat/GlobalRate */
     PhaseLoop<PhaseConfig> _loop;
     /** example of sharing data. @see HelloWorldCounter */
     HelloWorldCounter& _helloCounter;

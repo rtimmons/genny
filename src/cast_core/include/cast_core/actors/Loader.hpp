@@ -22,7 +22,7 @@
 
 #include <metrics/metrics.hpp>
 
-#include <value_generators/value_generators.hpp>
+#include <value_generators/DocumentGenerator.hpp>
 
 namespace genny::actor {
 
@@ -48,7 +48,7 @@ public:
 private:
     /** @private */
     struct PhaseConfig;
-    genny::DefaultRandom _rng;
+
     metrics::Operation _totalBulkLoad;
     metrics::Operation _individualBulkLoad;
     metrics::Operation _indexBuild;

@@ -1,0 +1,59 @@
+SchemaVersion: 2018-07-01
+Owner: Storage Engines
+
+Clients:
+  Default:
+    QueryOptions:
+      maxPoolSize: 400
+
+Actors:
+- Name: Loader
+  Type: Loader
+  Threads: 10
+  Phases:
+  - Repeat: 1
+    Database: cold
+    CollectionCount: 6
+    Threads: 1
+    DocumentCount: 1800000
+    BatchSize: 100000
+    Document:
+      a: {^RandomString: { length: 100 }}
+  - Repeat: 1
+    Database: hot
+    CollectionCount: 5
+    Threads: 1
+    DocumentCount: 1500000
+    BatchSize: 100000
+    Document:
+      a: {^RandomString: {length: 100 }}
+  - {Nop: true}
+
+- Name: HotSampler
+  Type: RandomSampler
+  Threads: 10
+  CollectionCount: 50
+  Database: hot
+  Phases:
+  - {Nop: true}
+  - {Nop: true}
+  - Duration: 59 minutes
+    GlobalRate: 10 per 10 milliseconds
+
+- Name: ColdScanner
+  Type: CollectionScanner
+  Threads: 6
+  Database: cold
+  CollectionCount: 60
+  Phases:
+  - {Nop: true}
+  - {Nop: true}
+  - Duration: 59 minutes
+    SkipFirstLoop: true
+    GlobalRate: 6 per 10 minutes
+    ScanType: Standard
+
+AutoRun:
+  Requires:
+    bootstrap:
+      mongodb_setup: single-replica-15gbwtcache

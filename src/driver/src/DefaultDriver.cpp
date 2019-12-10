@@ -13,15 +13,15 @@
 // limitations under the License.
 
 #include <algorithm>
-#include <cassert>
-#include <cstdlib>
-#include <fstream>
 #include <sstream>
 #include <thread>
 #include <vector>
 
 #include <boost/exception/diagnostic_information.hpp>
 #include <boost/exception/exception.hpp>
+#include <boost/filesystem.hpp>
+#include <boost/log/core.hpp>
+#include <boost/log/expressions.hpp>
 #include <boost/log/trivial.hpp>
 #include <boost/program_options.hpp>
 
@@ -35,25 +35,13 @@
 #include <metrics/MetricsReporter.hpp>
 #include <metrics/metrics.hpp>
 
-#include <driver/DefaultDriver.hpp>
+#include <driver/v1/DefaultDriver.hpp>
+#include <driver/workload_parsers.hpp>
 
+namespace genny::driver {
 namespace {
 
-using namespace genny;
-using namespace genny::driver;
-
-YAML::Node loadConfig(const std::string& source,
-                      DefaultDriver::ProgramOptions::YamlSource sourceType) {
-    if (sourceType == DefaultDriver::ProgramOptions::YamlSource::kString) {
-        return YAML::Load(source);
-    }
-    try {
-        return YAML::LoadFile(source);
-    } catch (const std::exception& ex) {
-        BOOST_LOG_TRIVIAL(error) << "Error loading yaml from " << source << ": " << ex.what();
-        throw;
-    }
-}
+namespace fs = boost::filesystem;
 
 template <typename Actor>
 void runActor(Actor&& actor,
@@ -77,55 +65,109 @@ void runActor(Actor&& actor,
     }
 }
 
-genny::driver::DefaultDriver::OutcomeCode doRunLogic(
-    const genny::driver::DefaultDriver::ProgramOptions& options) {
-    if (options.shouldListActors) {
-        globalCast().streamProducersTo(std::cout);
-        return genny::driver::DefaultDriver::OutcomeCode::kSuccess;
-    }
+DefaultDriver::OutcomeCode doRunLogic(const DefaultDriver::ProgramOptions& options) {
+    // setup logging as the first thing we do.
+    boost::log::core::get()->set_filter(boost::log::trivial::severity >= options.logVerbosity);
 
     genny::metrics::Registry metrics;
 
-    auto actorSetup = metrics.timer("Genny.Setup");
-    auto setupTimer = actorSetup.start();
+    const auto workloadName = fs::path(options.workloadSource).stem().string();
+    auto actorSetup = metrics.operation(workloadName, "Setup", 0u);
+    auto setupCtx = actorSetup.start();
 
-    auto yaml = loadConfig(options.workloadSource, options.workloadSourceType);
+    if (options.runMode == DefaultDriver::RunMode::kListActors) {
+        globalCast().streamProducersTo(std::cout);
+        setupCtx.success();
+        return DefaultDriver::OutcomeCode::kSuccess;
+    }
+
+    if (options.workloadSource.empty()) {
+        std::cerr << "Must specify a workload YAML file" << std::endl;
+        setupCtx.failure();
+        return DefaultDriver::OutcomeCode::kUserException;
+    }
+
+    fs::path phaseConfigSource;
+    if (options.workloadSourceType == DefaultDriver::ProgramOptions::YamlSource::kString) {
+        phaseConfigSource = fs::current_path();
+    } else {
+        /*
+         * The directory structure for workloads and phase configs is as follows:
+         * /etc (or /src if building without installing)
+         *     /workloads
+         *         /[name-of-workload-theme]
+         *             /[my-workload.yml]
+         * The path to the phase config snippet is obtained as a relative path from the workload
+         * file.
+         */
+        phaseConfigSource = fs::path(options.workloadSource).parent_path();
+    }
+
+    v1::WorkloadParser parser{phaseConfigSource};
+
+    // Consider passing in whole options struct if we pass in more than 2-3 fields.
+    auto yaml = parser.parse(options.workloadSource,
+                             options.workloadSourceType,
+                             options.isSmokeTest ? v1::WorkloadParser::Mode::kSmokeTest
+                                                 : v1::WorkloadParser::Mode::kNormal);
+
     auto orchestrator = Orchestrator{};
 
-    auto workloadContext =
-        WorkloadContext{yaml, metrics, orchestrator, options.mongoUri, globalCast()};
+    if (options.runMode == DefaultDriver::RunMode::kEvaluate) {
+        std::cout << YAML::Dump(yaml) << std::endl;
+        setupCtx.success();
+        return DefaultDriver::OutcomeCode::kSuccess;
+    }
 
-    if (options.isDryRun) {
+    NodeSource nodeSource{YAML::Dump(yaml),
+                          options.workloadSourceType ==
+                                  DefaultDriver::ProgramOptions::YamlSource::kFile
+                              ? options.workloadSource
+                              : "inline-yaml"};
+
+    auto workloadContext =
+        WorkloadContext{nodeSource.root(), metrics, orchestrator, options.mongoUri, globalCast()};
+
+    if (options.runMode == DefaultDriver::RunMode::kDryRun) {
         std::cout << "Workload context constructed without errors." << std::endl;
-        return genny::driver::DefaultDriver::OutcomeCode::kSuccess;
+        setupCtx.success();
+        return DefaultDriver::OutcomeCode::kSuccess;
     }
 
     orchestrator.addRequiredTokens(
         int(std::distance(workloadContext.actors().begin(), workloadContext.actors().end())));
 
-    setupTimer.report();
+    setupCtx.success();
 
-    auto activeActors = metrics.counter("Genny.ActiveActors");
+    auto startedActors = metrics.operation(workloadName, "ActorStarted", 0u);
+    auto finishedActors = metrics.operation(workloadName, "ActorFinished", 0u);
 
-    std::atomic<driver::DefaultDriver::OutcomeCode> outcomeCode =
-        driver::DefaultDriver::OutcomeCode::kSuccess;
+    std::atomic<DefaultDriver::OutcomeCode> outcomeCode = DefaultDriver::OutcomeCode::kSuccess;
 
-    std::mutex lock;
+    std::mutex reporting;
     std::vector<std::thread> threads;
     std::transform(cbegin(workloadContext.actors()),
                    cend(workloadContext.actors()),
                    std::back_inserter(threads),
                    [&](const auto& actor) {
                        return std::thread{[&]() {
-                           lock.lock();
-                           activeActors.incr();
-                           lock.unlock();
+                           {
+                               auto ctx = startedActors.start();
+                               ctx.addDocuments(1);
+
+                               std::lock_guard<std::mutex> lk{reporting};
+                               ctx.success();
+                           }
 
                            runActor(actor, outcomeCode, orchestrator);
 
-                           lock.lock();
-                           activeActors.decr();
-                           lock.unlock();
+                           {
+                               auto ctx = finishedActors.start();
+                               ctx.addDocuments(1);
+
+                               std::lock_guard<std::mutex> lk{reporting};
+                               ctx.success();
+                           }
                        }};
                    });
 
@@ -134,10 +176,12 @@ genny::driver::DefaultDriver::OutcomeCode doRunLogic(
 
     const auto reporter = genny::metrics::Reporter{metrics};
 
-    std::ofstream metricsOutput;
-    metricsOutput.open(options.metricsOutputFileName, std::ofstream::out | std::ofstream::trunc);
-    reporter.report(metricsOutput, options.metricsFormat);
-    metricsOutput.close();
+    {
+        std::ofstream metricsOutput;
+        metricsOutput.open(options.metricsOutputFileName,
+                           std::ofstream::out | std::ofstream::trunc);
+        reporter.report(metricsOutput, options.metricsFormat);
+    }
 
     return outcomeCode;
 }
@@ -145,16 +189,18 @@ genny::driver::DefaultDriver::OutcomeCode doRunLogic(
 }  // namespace
 
 
-genny::driver::DefaultDriver::OutcomeCode genny::driver::DefaultDriver::run(
-    const genny::driver::DefaultDriver::ProgramOptions& options) const {
+DefaultDriver::OutcomeCode DefaultDriver::run(const DefaultDriver::ProgramOptions& options) const {
     try {
         // Wrap doRunLogic in another catch block in case it throws an exception of its own e.g.
         // file not found or io errors etc - exceptions not thrown by ActorProducers.
         return doRunLogic(options);
+    } catch (const boost::exception& x) {
+        BOOST_LOG_TRIVIAL(error) << "Caught boost::exception "
+                                 << boost::diagnostic_information(x, true);
     } catch (const std::exception& x) {
-        BOOST_LOG_TRIVIAL(error) << "Caught exception " << x.what();
+        BOOST_LOG_TRIVIAL(error) << "Caught std::exception " << x.what();
     }
-    return genny::driver::DefaultDriver::OutcomeCode::kInternalException;
+    return DefaultDriver::OutcomeCode::kInternalException;
 }
 
 
@@ -176,51 +222,92 @@ std::string normalizeOutputFile(const std::string& str) {
     return str;
 }
 
+boost::log::trivial::severity_level parseVerbosity(const std::string& level) {
+
+    if (level == "trace") {
+        return boost::log::trivial::trace;
+    }
+    if (level == "debug") {
+        return boost::log::trivial::debug;
+    }
+    if (level == "info") {
+        return boost::log::trivial::info;
+    }
+    if (level == "warning") {
+        return boost::log::trivial::warning;
+    }
+    if (level == "error") {
+        return boost::log::trivial::error;
+    }
+    if (level == "fatal") {
+        return boost::log::trivial::fatal;
+    }
+
+    throw std::invalid_argument("Invalid verbosity level '" + level +
+                                "'. Need one of trace/debug/info/warning/error/fatal");
+}
+
 }  // namespace
 
 
-genny::driver::DefaultDriver::ProgramOptions::ProgramOptions(int argc, char** argv) {
+DefaultDriver::ProgramOptions::ProgramOptions(int argc, char** argv) {
     namespace po = boost::program_options;
 
-    po::options_description description{u8"🧞‍ Allowed Options 🧞‍"};
+    std::ostringstream progDescStream;
+    // Section headers are prefaced with new lines.
+    progDescStream << u8"\n🧞 Usage:\n";
+    progDescStream << "    " << argv[0] << " <subcommand> [options] <workload-file>\n";
+    progDescStream << u8"\n🧞 Subcommands:‍";
+    progDescStream << u8R"(
+    run          Run the workload normally
+    dry-run      Exit before the run step -- this may still make network
+                 connections during workload initialization
+    evaluate     Print the evaluated YAML workload file with minimal validation
+    list-actors  List all actors available for use
+    )" << "\n";
+
+    progDescStream << "🧞 Options";
+    po::options_description progDescription{progDescStream.str()};
     po::positional_options_description positional;
 
     // clang-format off
-    description.add_options()
-        ("help,h",
-            "Show help message")
-        ("list-actors",
-            "List all actors available for use")
-        ("dry-run",
-            "Exit before the run step---"
-            "this may still make network connections during workload initialization")
-        ("metrics-format,m",
+    progDescription.add_options()
+            ("subcommand", po::value<std::string>(), "1st positional argument")
+            ("help,h",
+             "Show help message")
+            ("metrics-format,m",
              po::value<std::string>()->default_value("csv"),
              "Metrics format to use")
-        ("metrics-output-file,o",
-            po::value<std::string>()->default_value("/dev/stdout"),
-            "Save metrics data to this file. Use `-` or `/dev/stdout` for stdout.")
-        ("workload-file,w",
-            po::value<std::string>(),
-            "Path to workload configuration yaml file. "
-            "Paths are relative to the program's cwd. "
-            "Can also specify as first positional argument.")
-        ("mongo-uri,u",
-            po::value<std::string>()->default_value("mongodb://localhost:27017"),
-            "Mongo URI to use for the default connection-pool.")
-    ;
+            ("metrics-output-file,o",
+             po::value<std::string>()->default_value("/dev/stdout"),
+             "Save metrics data to this file. Use `-` or `/dev/stdout` for stdout.")
+            ("workload-file,w",
+             po::value<std::string>(),
+             "Path to workload configuration yaml file. "
+             "Paths are relative to the program's cwd. "
+             "Can also specify as the last positional argument.")
+            ("mongo-uri,u",
+             po::value<std::string>()->default_value("mongodb://localhost:27017"),
+             "Mongo URI to use for the default connection-pool.")
+            ("verbosity,v",
+              po::value<std::string>()->default_value("info"),
+              "Log severity for boost logging. Valid values are trace/debug/info/warning/error/fatal.")
+            ("smoke-test,s",
+             po::value<bool>()->default_value(false),
+             "Run a workload in smoke test mode where all phases are set to Repeat=1");
 
+    positional.add("subcommand", 1);
     positional.add("workload-file", -1);
 
     auto run = po::command_line_parser(argc, argv)
-        .options(description)
-        .positional(positional)
-        .run();
+            .options(progDescription)
+            .positional(positional)
+            .run();
     // clang-format on
 
     {
         auto stream = std::ostringstream();
-        stream << description;
+        stream << progDescription;
         this->description = stream.str();
     }
 
@@ -228,10 +315,35 @@ genny::driver::DefaultDriver::ProgramOptions::ProgramOptions(int argc, char** ar
     po::store(run, vm);
     po::notify(vm);
 
-    this->isHelp = vm.count("help") >= 1;
-    this->shouldListActors = vm.count("list-actors") >= 1;
-    this->isDryRun = vm.count("dry-run") >= 1;
+    if (!vm.count("subcommand")) {
+        std::cerr << "ERROR: missing subcommand" << std::endl;
+        this->runMode = RunMode::kHelp;
+        return;
+    }
+    const auto subcommand = vm["subcommand"].as<std::string>();
+
+    if (subcommand == "list-actors")
+        this->runMode = RunMode::kListActors;
+    else if (subcommand == "dry-run")
+        this->runMode = RunMode::kDryRun;
+    else if (subcommand == "evaluate")
+        this->runMode = RunMode::kEvaluate;
+    else if (subcommand == "run")
+        this->runMode = RunMode::kNormal;
+    else if (subcommand == "help")
+        this->runMode = RunMode::kHelp;
+    else {
+        std::cerr << "ERROR: Unexpected subcommand " << subcommand << std::endl;
+        this->runMode = RunMode::kHelp;
+        return;
+    }
+
+    if (vm.count("help") >= 1)
+        this->runMode = RunMode::kHelp;
+
+    this->logVerbosity = parseVerbosity(vm["verbosity"].as<std::string>());
     this->metricsFormat = vm["metrics-format"].as<std::string>();
+    this->isSmokeTest = vm["smoke-test"].as<bool>();
     this->metricsOutputFileName = normalizeOutputFile(vm["metrics-output-file"].as<std::string>());
     this->mongoUri = vm["mongo-uri"].as<std::string>();
 
@@ -242,3 +354,4 @@ genny::driver::DefaultDriver::ProgramOptions::ProgramOptions(int argc, char** ar
         this->workloadSourceType = YamlSource::kString;
     }
 }
+}  // namespace genny::driver

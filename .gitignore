@@ -10,7 +10,12 @@ cmake-build-debug
 [._]s[a-rt-v][a-z]
 [._]ss[a-gi-z]
 [._]sw[a-p]
+tags
 
 # generated
 build
 dist
+
+# python
+__pycache__
+venv

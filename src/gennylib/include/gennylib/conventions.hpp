@@ -16,12 +16,17 @@
 #define HEADER_CC9B7EF0_9FB9_4AD4_B64C_DC7AE48F72A6_INCLUDED
 
 #include <chrono>
+#include <climits>
 #include <cmath>
 #include <sstream>
 
-#include <yaml-cpp/yaml.h>
+#include <mongocxx/read_concern.hpp>
+#include <mongocxx/read_preference.hpp>
+#include <mongocxx/write_concern.hpp>
 
 #include <gennylib/InvalidConfigurationException.hpp>
+#include <gennylib/Node.hpp>
+#include <gennylib/Orchestrator.hpp>
 
 namespace genny {
 
@@ -31,8 +36,8 @@ namespace genny {
  * the value in a node or a fallback value (traditionally, this involves at least a decltype).
  */
 template <typename T, typename S>
-void decodeNodeInto(T& out, const YAML::Node& node, const S& fallback) {
-    out = node.as<T>(fallback);
+void decodeNodeInto(T& out, const genny::Node& node, const S& fallback) {
+    out = node.maybe<T>().value_or(fallback);
 }
 
 /**
@@ -44,7 +49,7 @@ struct IntegerSpec {
     IntegerSpec() = default;
     ~IntegerSpec() = default;
 
-    explicit IntegerSpec(int64_t v) : value{v} {}
+    IntegerSpec(int64_t v) : value{v} {}
     // int64_t is used by default, you can explicitly cast to another type if needed.
     int64_t value;
 
@@ -96,6 +101,10 @@ public:  // Operators
     explicit constexpr operator std::chrono::milliseconds() const {
         return std::chrono::duration_cast<std::chrono::milliseconds>(value);
     }
+
+    explicit constexpr operator bool() const {
+        return count() != 0;
+    }
 };
 
 inline bool operator==(const TimeSpec& lhs, const TimeSpec& rhs) {
@@ -106,7 +115,7 @@ inline bool operator==(const TimeSpec& lhs, const TimeSpec& rhs) {
 using Duration = typename TimeSpec::ValueT;
 
 /**
- * Rate defined as X operations per Y duration.
+ * RateSpec defined as X operations per Y duration.
  */
 struct RateSpec {
     RateSpec() = default;
@@ -124,14 +133,253 @@ inline bool operator==(const RateSpec& lhs, const RateSpec& rhs) {
     return (lhs.per == rhs.per) && (lhs.operations == rhs.operations);
 }
 
+struct PhaseRangeSpec {
+    PhaseRangeSpec() = default;
+    ~PhaseRangeSpec() = default;
+
+    PhaseRangeSpec(genny::IntegerSpec s, genny::IntegerSpec e)
+        : start{static_cast<genny::PhaseNumber>(s.value)},
+          end{static_cast<genny::PhaseNumber>(e.value)} {
+        if (!(s.value >= 0 && s.value <= UINT_MAX)) {
+            std::stringstream msg;
+            msg << "Invalid start value for genny::PhaseRangeSpec: '" << s.value << "'."
+                << " The value must be of type 'u_int32_t";
+            throw genny::InvalidConfigurationException(msg.str());
+        }
+        if (!(e.value >= 0 && e.value <= UINT_MAX)) {
+            std::stringstream msg;
+            msg << "Invalid end value for genny::PhaseRangeSpec: '" << e.value << "'."
+                << " The value must be of type 'u_int32_t";
+            throw genny::InvalidConfigurationException(msg.str());
+        }
+    }
+    PhaseRangeSpec(genny::IntegerSpec s) : PhaseRangeSpec(s, s) {}
+
+    genny::PhaseNumber start;
+    genny::PhaseNumber end;
+};
+
 }  // namespace genny
 
 namespace YAML {
 
 using genny::decodeNodeInto;
 
+template <>
+struct convert<mongocxx::read_preference> {
+    using ReadPreference = mongocxx::read_preference;
+    using ReadMode = mongocxx::read_preference::read_mode;
+    static Node encode(const ReadPreference& rhs) {
+        Node node;
+        auto mode = rhs.mode();
+        if (mode == ReadMode::k_primary) {
+            node["ReadMode"] = "primary";
+        } else if (mode == ReadMode::k_primary_preferred) {
+            node["ReadMode"] = "primaryPreferred";
+        } else if (mode == ReadMode::k_secondary) {
+            node["ReadMode"] = "secondary";
+        } else if (mode == ReadMode::k_secondary_preferred) {
+            node["ReadMode"] = "secondaryPreferred";
+        } else if (mode == ReadMode::k_nearest) {
+            node["ReadMode"] = "nearest";
+        }
+        auto maxStaleness = rhs.max_staleness();
+        if (maxStaleness) {
+            node["MaxStaleness"] = genny::TimeSpec(*maxStaleness);
+        }
+        return node;
+    }
+
+    static bool decode(const Node& node, ReadPreference& rhs) {
+        if (!node.IsMap()) {
+            return false;
+        }
+        if (!node["ReadMode"]) {
+            // readPreference must have a read mode specified.
+            return false;
+        }
+        auto readMode = node["ReadMode"].as<std::string>();
+        if (readMode == "primary") {
+            rhs.mode(ReadMode::k_primary);
+        } else if (readMode == "primaryPreferred") {
+            rhs.mode(ReadMode::k_primary_preferred);
+        } else if (readMode == "secondary") {
+            rhs.mode(ReadMode::k_secondary);
+        } else if (readMode == "secondaryPreferred") {
+            rhs.mode(ReadMode::k_secondary_preferred);
+        } else if (readMode == "nearest") {
+            rhs.mode(ReadMode::k_nearest);
+        } else {
+            return false;
+        }
+        if (node["MaxStaleness"]) {
+            auto maxStaleness = node["MaxStaleness"].as<genny::TimeSpec>();
+            rhs.max_staleness(std::chrono::seconds{maxStaleness});
+        }
+        return true;
+    }
+};
+
+template <>
+struct convert<mongocxx::write_concern> {
+    using WriteConcern = mongocxx::write_concern;
+    static Node encode(const WriteConcern& rhs) {
+        Node node;
+        node["Timeout"] = genny::TimeSpec{rhs.timeout()};
+
+        auto journal = rhs.journal();
+        node["Journal"] = journal;
+
+        auto ackLevel = rhs.acknowledge_level();
+        if (ackLevel == WriteConcern::level::k_majority) {
+            node["Level"] = "majority";
+        } else if (ackLevel == WriteConcern::level::k_acknowledged) {
+            auto numNodes = rhs.nodes();
+            if (numNodes) {
+                node["Level"] = *numNodes;
+            }
+        }
+        return node;
+    }
+
+    static bool decode(const Node& node, WriteConcern& rhs) {
+        if (!node.IsMap()) {
+            return false;
+        }
+        if (!node["Level"]) {
+            // writeConcern must specify the write concern level.
+            return false;
+        }
+        auto level = node["Level"].as<std::string>();
+        try {
+            auto level = node["Level"].as<int>();
+            rhs.nodes(level);
+        } catch (const BadConversion& e) {
+            auto level = node["Level"].as<std::string>();
+            if (level == "majority") {
+                rhs.majority(std::chrono::milliseconds{0});
+            } else {
+                // writeConcern level must be of valid integer or 'majority'.
+                return false;
+            }
+        }
+        if (node["Timeout"]) {
+            auto timeout = node["Timeout"].as<genny::TimeSpec>();
+            rhs.timeout(std::chrono::milliseconds{timeout});
+        }
+        if (node["Journal"]) {
+            auto journal = node["Journal"].as<bool>();
+            rhs.journal(journal);
+        }
+        return true;
+    }
+};
+
+template <>
+struct convert<mongocxx::read_concern> {
+    using ReadConcern = mongocxx::read_concern;
+    using ReadConcernLevel = mongocxx::read_concern::level;
+    static Node encode(const ReadConcern& rhs) {
+        Node node;
+        auto level = std::string(rhs.acknowledge_string());
+        if (!level.empty()) {
+            node["Level"] = level;
+        }
+        return node;
+    }
+
+    static bool isValidReadConcernString(std::string_view rcString) {
+        return (rcString == "local" || rcString == "majority" || rcString == "linearizable" ||
+                rcString == "snapshot" || rcString == "available");
+    }
+
+    static bool decode(const Node& node, ReadConcern& rhs) {
+        if (!node.IsMap()) {
+            return false;
+        }
+        if (!node["Level"]) {
+            // readConcern must have a read concern level specified.
+            return false;
+        }
+        auto level = node["Level"].as<std::string>();
+        if (isValidReadConcernString(level)) {
+            rhs.acknowledge_string(level);
+            return true;
+        } else {
+            return false;
+        }
+    }
+};
+
 /**
- * Convert between YAML and genny::Rate
+ * Convert between YAML and genny::PhaseRange
+ *
+ * The YAML syntax accepts "[genny::Integer]..[genny::Integer]".
+ * This is used to stipulate repeating a phase N number of times
+ */
+template <>
+struct convert<genny::PhaseRangeSpec> {
+    static Node encode(const genny::PhaseRangeSpec rhs) {
+        std::stringstream msg;
+        msg << rhs.start << ".." << rhs.end;
+        return Node{msg.str()};
+    }
+
+    static bool decode(const Node& node, genny::PhaseRangeSpec& rhs) {
+        if (node.IsSequence() || node.IsMap()) {
+            return false;
+        }
+        auto strRepr = node.as<std::string>();
+
+        // use '..' as delimiter.
+        constexpr std::string_view delimiter = "..";
+        auto delimPos = strRepr.find(delimiter);
+
+        if (delimPos == std::string::npos) {
+            // check if user inputted an integer
+            try {
+                auto phaseNumberYaml = node.as<genny::IntegerSpec>();
+                rhs = genny::PhaseRangeSpec(phaseNumberYaml);
+                return true;
+            } catch (const genny::InvalidConfigurationException& e) {
+                std::stringstream msg;
+                msg << "Invalid value for genny::PhaseRangeSpec: '" << strRepr << "'."
+                    << " The correct syntax is either a single integer or two integers delimited "
+                       "by '..'";
+                throw genny::InvalidConfigurationException(msg.str());
+            }
+        }
+
+        genny::IntegerSpec start;
+        genny::IntegerSpec end;
+
+        auto startYaml = Load(strRepr.substr(0, delimPos));
+        auto endYaml = Load(strRepr.substr(delimPos + delimiter.size()));
+
+        try {
+            start = startYaml.as<genny::IntegerSpec>();
+            end = endYaml.as<genny::IntegerSpec>();
+        } catch (const genny::InvalidConfigurationException& e) {
+            std::stringstream msg;
+            msg << "Invalid value for genny::PhaseRangeSpec: '" << strRepr << "'."
+                << " The correct syntax is two integers delimited by '..'";
+            throw genny::InvalidConfigurationException(msg.str());
+        }
+
+        if (start > end) {
+            std::stringstream msg;
+            msg << "Invalid value for genny::PhaseRangeSpec: '" << strRepr << "'."
+                << " The start value cannot be greater than the end value.";
+            throw genny::InvalidConfigurationException(msg.str());
+        }
+        rhs = genny::PhaseRangeSpec(start, end);
+
+        return true;
+    }
+};
+
+/**
+ * Convert between YAML and genny::RateSpec
  *
  * The YAML syntax accepts [genny::Integer] per [genny::Time]
  * The syntax is interpreted as operations per unit of time.

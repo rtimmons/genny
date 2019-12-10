@@ -45,21 +45,9 @@
 ##                ⚡️ Variants ⚡️
 
 ignore:
-- "*.md" # don't schedule tests if a commit only changes markdown files
+- "*.md"  # don't schedule tests if a commit only changes markdown files
 
 buildvariants:
-
-- name: archlinux
-  display_name: Arch Linux
-  modules: ~
-  run_on:
-  - archlinux-test
-  expansions:
-    distro: archlinux
-  tasks:
-  - name: tg_compile_and_test
-  - name: t_push
-
 - name: amazon2
   display_name: Amazon Linux 2
   modules: ~
@@ -67,8 +55,10 @@ buildvariants:
   - amazon2-build
   expansions:
     distro: amazon2
+    # latest successful build from master as of 2019-04-22 on "SSL Amazon Linux 2" compile task "Binaries" file
+    # commit should match that in get-mongo-source.sh
     mongodb_archive_url:
-      https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-amazon2-4.1.7.tgz
+      https://s3.amazonaws.com/mciuploads/mongodb-mongo-master/amazon2/cda363f65bde8d93a7c679757efd3edf7c6e8ad9/binaries/mongo-mongodb_mongo_master_amazon2_cda363f65bde8d93a7c679757efd3edf7c6e8ad9_19_04_22_14_29_27.tgz
   tasks:
   - name: tg_compile_and_test_with_server
   - name: t_push
@@ -81,7 +71,7 @@ buildvariants:
   run_on:
   - rhel70
   tasks:
-  - name: t_compile
+  - name: tg_compile
   - name: t_push
 
 - name: ubuntu1804
@@ -92,7 +82,7 @@ buildvariants:
   run_on:
   - ubuntu1804-build
   tasks:
-  - name: t_compile
+  - name: tg_compile
   - name: t_push
 
 - name: macos-1014
@@ -101,9 +91,18 @@ buildvariants:
   run_on:
   - macos-1014
   tasks:
-  - name: t_rm_toolchain_dir_mac
-  - name: t_compile
+  - name: tg_compile
   - name: t_push
+
+- name: centos6-perf
+  display_name: CentOS 6 for Performance
+  modules: ~
+  expansions:
+    distro: rhel62
+  run_on:
+  - centos6-perf
+  tasks:
+  - name: tg_compile_and_benchmark
 
 
 ##                ⚡️ Tasks ⚡️
@@ -119,12 +118,10 @@ tasks:
       display_name: Genny
       short_name: genny
       install_dir: dist
-- name: t_rm_toolchain_dir_mac
-  commands:
-  - func: f_rm_toolchain_dir_mac
+
 - name: t_push
   depends_on: t_compile
-  patchable: no
+  patchable: false
   commands:
   - func: f_push_official
     vars:
@@ -139,33 +136,52 @@ tasks:
   commands:
   - func: f_python_test
 
+- name: t_lint_workloads
+  commands:
+  - func: f_lint_workloads
+
 - name: t_cmake_test
   commands:
   - func: f_cmake_test
+
+- name: t_benchmark_test
+  commands:
+  - func: f_benchmark_test
 
 - name: t_integration_test_standalone
   commands:
   - func: f_resmoke_test
     vars:
-      resmoke_suite: genny_standalone.yml
+      resmoke_test_args: "--suites src/resmokeconfig/genny_standalone.yml"
 
 - name: t_integration_test_single_node_replset
   commands:
   - func: f_resmoke_test
     vars:
-      resmoke_suite: genny_single_node_replset.yml
+      resmoke_test_args: "--suites src/resmokeconfig/genny_single_node_replset.yml"
 
 - name: t_integration_test_three_node_replset
   commands:
   - func: f_resmoke_test
     vars:
-      resmoke_suite: genny_three_node_replset.yml
+      resmoke_test_args: "--suites src/resmokeconfig/genny_three_node_replset.yml"
 
 - name: t_integration_test_sharded
   commands:
   - func: f_resmoke_test
     vars:
-      resmoke_suite: genny_sharded.yml
+      resmoke_test_args: "--suites src/resmokeconfig/genny_sharded.yml"
+
+# Must run this task last to avoid polluting test results with tests generated
+# by the new actor.
+- name: t_test_create_new_actor_script
+  commands:
+  - func: f_run_create_new_actor_script
+  - func: f_compile
+  - func: f_dry_run_workloads  # Test the generated yaml file is valid.
+  - func: f_resmoke_test
+    vars:
+      resmoke_test_args: "--create-new-actor-test-suite"
 
 
 ##                ⚡️ Task Groups ⚡️
@@ -192,7 +208,14 @@ task_groups:
   # run after t_compile.
   - t_compile
   - t_python_test
+  - t_lint_workloads
   - t_cmake_test
+
+- <<: *a_compile_and_test
+  name: tg_compile_and_benchmark
+  tasks:
+  - t_compile
+  - t_benchmark_test
 
 - <<: *a_compile_and_test
   name: tg_compile_and_test_with_server
@@ -205,6 +228,12 @@ task_groups:
   - t_integration_test_single_node_replset
   - t_integration_test_three_node_replset
   - t_integration_test_sharded
+  - t_test_create_new_actor_script  # Must run this task last.
+
+- name: tg_compile
+  max_hosts: 1
+  tasks:
+  - t_compile
 
 
 ##                ⚡️ Functions ⚡️
@@ -230,7 +259,7 @@ functions:
       working_dir: src
       binary: /bin/bash
       args:
-        - "${workdir}/src/scripts/get-mongo-source.sh"
+      - "${workdir}/src/scripts/get-mongo-source.sh"
   - command: shell.exec
     params:
       working_dir: src/build/mongo
@@ -239,13 +268,6 @@ functions:
         set -euo pipefail
         curl -LSs "${mongodb_archive_url}" -o mongodb.tgz
         tar --strip-components=1 -zxvf mongodb.tgz
-
-  f_rm_toolchain_dir_mac:
-    - command: shell.exec
-      params:
-        shell: bash
-        script: |
-          rm -rf /data/mci/gennytoolchain
 
   ##
   # Archive an installed library into a tarball and upload it with
@@ -332,6 +354,10 @@ functions:
 
   ##
   # Compile the project in src/build.
+  #
+  # We always remove the toolchain directory because hosts
+  # may have incomplete or invalid toolchain directories from
+  # previous (unsuccessful) builds in the gennytoolchain project.
   ##
   f_compile:
   - command: shell.exec
@@ -339,11 +365,9 @@ functions:
       working_dir: src
       shell: bash
       script: |
-        set -o errexit
-        set -o pipefail
+        set -eo pipefail
 
-        # for python3
-        export PATH=/opt/mongodbtoolchain/v3/bin:$PATH
+        rm -rf /data/mci/gennytoolchain*
 
         export DEVELOPER_DIR="/Applications/Xcode10.1.app"
 
@@ -378,45 +402,95 @@ functions:
       working_dir: src
       shell: bash
       script: |
-        set -o errexit
-        set -o pipefail
-        set -o nounset
-
-        # for python3
-        export PATH=/opt/mongodbtoolchain/v3/bin:$PATH
-
+        set -euo pipefail
         ./scripts/lamp cmake-test
+
+  ##
+  # Runs benchmarks via ctest.
+  # Requires f_compile to have been run first.
+  ##
+  f_benchmark_test:
+  - command: shell.exec
+    params:
+      continue_on_err: true
+      working_dir: src
+      shell: bash
+      script: |
+        set -euo pipefail
+        ./scripts/lamp benchmark-test
 
   ##
   # Runs tests via resmoke.
   # Requires f_compile to have been run first.
   ##
   f_resmoke_test:
-  - command: subprocess.exec
+  - command: shell.exec
     params:
       continue_on_err: true
       working_dir: src
-      binary: /bin/bash
-      args:
-      - ${workdir}/src/scripts/run-resmoke.sh
-      env:
-        RESMOKE_SUITE: ${resmoke_suite}
+      shell: bash
+      script: |
+        set -eou pipefail
+        ./scripts/lamp resmoke-test ${resmoke_test_args}
 
   ##
-  # Runs python nosetests.
+  # Runs tests for the create_new_actor script.
+  ##
+  f_run_create_new_actor_script:
+  - command: subprocess.exec
+    params:
+      working_dir: src
+      binary: /bin/bash
+      args:
+      - ${workdir}/src/scripts/create-new-actor.sh
+      - SelfTestActor
+
+  ##
+  # Runs python unit tests.
   ##
   f_python_test:
   - command: shell.exec
     params:
       continue_on_err: true
-      working_dir: src/src/python
+      working_dir: src
       shell: bash
       script: |
-        set -o errexit
-        set -o pipefail
-        set -o nounset
+        set -eou pipefail
 
-        python3 setup.py nosetests
+        # for python3
+        export PATH=/opt/mongodbtoolchain/v3/bin:$PATH
+
+        # Run Genny Python unit tests
+        pushd src/python
+          python3 setup.py nosetests
+        popd
+
+        # Run Genny build scripts unit tests
+        ./scripts/lamp self-test
+
+  ##
+  # Runs the YAML linter for Genny workloads
+  ##
+  f_lint_workloads:
+  - command: shell.exec
+    params:
+      continue_on_err: true
+      working_dir: src
+      shell: bash
+      script: |
+        set -eo pipefail
+
+        export PATH=/opt/mongodbtoolchain/v3/bin:$PATH
+
+        python3 -m virtualenv venv
+        source venv/bin/activate
+
+        # Install Genny python scripts into the virtualenv
+        pushd src/python
+          python3 setup.py install
+        popd
+
+        lint-workloads
 
   ##
   # Reports test results to evergreen API.
@@ -447,9 +521,7 @@ functions:
     params:
       shell: bash
       script: |
-        set -o errexit
-        set -o pipefail
-        set -o nounset
+        set -eou pipefail
 
         rm -f \
         src/build/*.junit.xml \

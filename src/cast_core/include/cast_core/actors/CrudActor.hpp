@@ -21,12 +21,10 @@
 #include <mongocxx/pool.hpp>
 
 #include <gennylib/Actor.hpp>
-#include <gennylib/ExecutionStrategy.hpp>
 #include <gennylib/PhaseLoop.hpp>
 #include <gennylib/context.hpp>
 
-#include <value_generators/DefaultRandom.hpp>
-#include <value_generators/value_generators.hpp>
+#include <value_generators/DocumentGenerator.hpp>
 
 namespace genny::actor {
 
@@ -44,8 +42,6 @@ namespace genny::actor {
  *   Database:
  *   Type: CrudActor
  *   Database: testdb
- *   ExecutionStrategy:
- *     ThrowOnFailure: true
  *   Phases:
  *   - Repeat: 1
  *     Collection: test
@@ -100,8 +96,8 @@ public:
 
 private:
     mongocxx::pool::entry _client;
-    genny::DefaultRandom _rng;
 
+    /** @private */
     struct PhaseConfig;
     PhaseLoop<PhaseConfig> _loop;
 };

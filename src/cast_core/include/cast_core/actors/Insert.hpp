@@ -21,11 +21,10 @@
 #include <mongocxx/pool.hpp>
 
 #include <gennylib/Actor.hpp>
-#include <gennylib/ExecutionStrategy.hpp>
 #include <gennylib/PhaseLoop.hpp>
 #include <gennylib/context.hpp>
-
-#include <value_generators/value_generators.hpp>
+#include <metrics/operation.hpp>
+#include <value_generators/DocumentGenerator.hpp>
 
 namespace genny::actor {
 
@@ -44,11 +43,10 @@ public:
     void run() override;
 
 private:
-    genny::DefaultRandom _rng;
-
-    ExecutionStrategy _strategy;
     mongocxx::pool::entry _client;
+    metrics::Operation _insert;
 
+    /** @private */
     struct PhaseConfig;
     PhaseLoop<PhaseConfig> _loop;
 };

@@ -5,9 +5,9 @@ Actors:
 - Name: ServerStatusInsertFind
   Type: RunCommand
   Threads: 1
-  Database: test
   Phases:
   - Duration: 5 minutes
+    Database: test
     Operations:
     - OperationMetricsName: ServerStatus
       OperationName: RunCommand
@@ -20,9 +20,9 @@ Actors:
     - OperationMetricsName: Find
       OperationCommand:
         find: restaurants
-        filter: { rating: { $gte: 9 }, cuisine: italian }
-        projection: { name: 1, rating: 1, address: 1 }
-        sort: { name: 1 }
+        filter: {rating: {$gte: 9}, cuisine: italian}
+        projection: {name: 1, rating: 1, address: 1}
+        sort: {name: 1}
         limit: 5
       OperationName: RunCommand
 - Name: CurrentOp
@@ -40,10 +40,11 @@ Actors:
   Threads: 1
   Phases:
   - Phase: 0
+    Repeat: 1
     Operation:
       OperationMetricsName: Stepdown
       OperationName: RunCommand
       OperationCommand:
         replSetStepDown: 60
-      OperationAwaitStepdown: yes
+      OperationAwaitStepdown: true
 

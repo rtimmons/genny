@@ -34,6 +34,82 @@ you can use `setup.py develop` to avoid having to install after every change:
 python setup.py develop
 ```
 
+
+Script: `lint-yaml`
+---------------------
+
+```sh
+lint-yaml
+```
+
+Lint most of the YAML files in the Genny repository,
+including workloads, phases, and `evergreen.yml`.
+
+Make you run the script from the root of the Genny repository
+(so it can pick up on the `.yamllint` linter config file)
+
+
+Script: `genny-auto-tasks`
+---------------------------------
+
+Generates JSON that can be used as input to evergreen's generate.tasks,
+representing either evergreen tasks or buildvariants that run genny workloads.
+
+If run with `--generate-all-tasks`, `genny-auto-tasks` outputs a JSON file 
+of task definitions for all workloads in the `/src/workloads` genny directory.
+If run with `--variants`, this program outputs a JSON file of buildvariant
+definitions that run a subset of workload tasks based on the other arguments.
+These two invocations are separate to ensure that no task will be generated more
+than once when run on evergreen (which would cause generate.tasks to throw an
+error, even across different buildvariants).
+
+Thus, running `genny-auto-tasks` is generally a two step process. First, one
+generates all tasks as follows, with the output JSON going to `build/all_tasks.json`
+in this case:
+
+```sh
+genny-auto-tasks --generate-all-tasks --output build/all_tasks.json
+```
+
+Upon using generate.tasks with the outputted JSON, one can then generate JSON
+representing buildvariants that run the proper subset of tasks, based either
+on git modification history or the evergreen environment (See "Patch-Testing
+Genny Changes with Sys-Perf / DSI" in the main README for more info). For example,
+these commands write JSON definitions of `linux-1-node-replSet` buildvariants
+that run modified/autorun genny workloads.
+
+```sh
+genny-auto-tasks --modified --variants linux-1-node-replSet --output build/variants.json
+genny-auto-tasks --autorun --variants linux-1-node-replSet --output build/variants.json
+```
+
+
+Script: `genny-metrics-legacy-report`
+---------------------------------
+
+Produces a summary in legacy JSON format for the Evergreen perf plugin.
+
+```sh
+./genny run -o metrics.csv -m cedar-csv InsertRemove.yml
+genny-metrics-legacy-report metrics.csv
+```
+
+
+Script: `genny-metrics-report`
+---------------------------------
+
+Send metrics to Evergreen's metrics collection service (Cedar).
+
+This code snippet is provided for reference only as Cedar does
+not yet support local environments.
+
+```sh
+./genny run -o metrics.csv -m cedar-csv InsertRemove.yml
+# requires expansions.yml in cwd for cedar parameters
+genny-metrics-report metrics.csv
+```
+
+
 Running Self-Tests
 ------------------
 
@@ -59,13 +135,5 @@ yapf -i --recursive genny tests
 ```
 
 
-Script: `genny-metrics-summarize`
----------------------------------
 
-Produces a summary in JSON format given the 'csv' output format:
-
-```sh
-./genny -w InsertRemove.yml -o metrics.csv
-genny-metrics-summarize < metrics.csv
-```
 
