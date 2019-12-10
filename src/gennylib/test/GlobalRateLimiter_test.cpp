@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 #include <boost/log/trivial.hpp>
 
 #include <chrono>
@@ -21,31 +22,10 @@
 #include <gennylib/v1/GlobalRateLimiter.hpp>
 
 #include <testlib/ActorHelper.hpp>
+#include <testlib/clocks.hpp>
 #include <testlib/helpers.hpp>
 
 namespace genny::testing {
-
-// Hack to allow different DummyClocks classes to be created so calling static methods won't
-// conflict.
-template <typename DummyT>
-struct DummyClock {
-    static int64_t nowRaw;
-
-    // <clock-concept>
-    using rep = int64_t;
-    using period = std::nano;
-    using duration = std::chrono::duration<DummyClock::rep, DummyClock::period>;
-    using time_point = std::chrono::time_point<DummyClock>;
-    const static bool is_steady = true;
-    // </clock-concept>
-
-    static auto now() {
-        return DummyClock::time_point(DummyClock::duration(nowRaw));
-    }
-};
-
-template <typename DummyT>
-int64_t DummyClock<DummyT>::nowRaw = 0;
 
 namespace {
 using Catch::Matchers::Matches;
@@ -77,72 +57,90 @@ TEST_CASE("Global rate limiter") {
     const RateSpec rs{per, burst};  // 2 operations per 3 ticks.
     v1::BaseGlobalRateLimiter<MyDummyClock> grl{rs};
 
-    SECTION("Stores the burst size and rate") {
-        REQUIRE(grl.getBurstSize() == burst);
-        REQUIRE(grl.getRate() == per);
-    }
-
     SECTION("Limits Rate") {
+        grl.resetLastEmptied();
         auto now = MyDummyClock::now();
-        // First consumeIfWithinRate() goes through because we intentionally have the rate limiter
-        // do so.
-        REQUIRE(grl.consumeIfWithinRate(now));
 
-        // Second consumeIfWithinRate() should fail because we have not incremented the clock.
+        // consumeIfWithinRate() should succeed because we allow "burst" number of ops at the
+        // beginning.
+        for (int i = 0; i < burst; i++) {
+            REQUIRE(grl.consumeIfWithinRate(now));
+        }
+
+        // The next call should fail because we have not incremented the clock.
         REQUIRE(!grl.consumeIfWithinRate(now));
 
         // Increment the clock should allow consumeIfWithinRate() to succeed exactly once.
         MyDummyClock::nowRaw += per;
         now = MyDummyClock::now();
-        REQUIRE(grl.consumeIfWithinRate(now));
+        for (int i = 0; i < burst; i++) {
+            REQUIRE(grl.consumeIfWithinRate(now));
+        }
         REQUIRE(!grl.consumeIfWithinRate(now));
     }
 }
 
-TEST_CASE("Global rate limiter can be used by phase loop") {
-    using namespace std::chrono_literals;
 
-    class IncActor : public Actor {
-    public:
-        struct IncCounter : WorkloadContext::ShareableState<std::atomic_int64_t> {};
+class IncActor : public Actor {
+public:
+    struct IncCounter : WorkloadContext::ShareableState<std::atomic_int64_t> {};
 
-        IncActor(genny::ActorContext& ac)
-            : Actor(ac),
-              _loop{ac},
-              _counter{WorkloadContext::getActorSharedState<IncActor, IncCounter>()} {};
-
-        void run() override {
-            for (auto&& config : _loop) {
-                for (auto _ : config) {
-                    ++_counter;
-                }
-            }
-        };
-
-        static std::string_view defaultName() {
-            return "IncActor";
-        }
-
-    private:
-        struct PhaseConfig {
-            explicit PhaseConfig(PhaseContext& context){};
-        };
-
-        IncCounter& _counter;
-        PhaseLoop<PhaseConfig> _loop;
+    IncActor(genny::ActorContext& ac)
+        : Actor(ac),
+          _loop{ac},
+          _counter{WorkloadContext::getActorSharedState<IncActor, IncCounter>()} {
+        _counter.store(0);
     };
 
+    void run() override {
+        for (auto&& config : _loop) {
+            for (auto _ : config) {
+                //                BOOST_LOG_TRIVIAL(info) << "Incrementing";
+                ++_counter;
+            }
+        }
+    };
+
+    static std::string_view defaultName() {
+        return "IncActor";
+    }
+
+private:
+    struct PhaseConfig {
+        explicit PhaseConfig(PhaseContext& context){};
+    };
+
+    IncCounter& _counter;
+    PhaseLoop<PhaseConfig> _loop;
+};
+
+auto getCurState() {
+    return WorkloadContext::getActorSharedState<IncActor, IncActor::IncCounter>().load();
+}
+
+auto resetState() {
+    return WorkloadContext::getActorSharedState<IncActor, IncActor::IncCounter>().store(0);
+}
+
+
+auto incProducer = std::make_shared<DefaultActorProducer<IncActor>>("IncActor");
+
+TEST_CASE("Global rate limiter can be used by phase loop", "[benchmark]") {
+    using namespace std::chrono_literals;
+
     SECTION("Fail if no Repeat or Duration") {
-        YAML::Node config = YAML::Load(R"(
+        NodeSource ns(R"(
 SchemaVersion: 2018-07-01
 Actors:
 - Name: One
   Type: IncActor
   Threads: 1
   Phases:
-    - Rate: 5 per 4 seconds
-)");
-        auto incProducer = std::make_shared<DefaultActorProducer<IncActor>>("IncActor");
+    - GlobalRate: 5 per 4 seconds
+      Blocking: None
+)",
+                      "");
+        auto& config = ns.root();
         int num_threads = 2;
 
         auto fun = [&]() {
@@ -153,79 +151,113 @@ Actors:
 
     // The rate interval needs to be large enough to avoid sporadic failures, which makes
     // this test take longer. It therefore has the "[slow]" label.
-    SECTION("Prevents execution when the rate is exceeded", "[slow]") {
-        YAML::Node config = YAML::Load(R"(
+    SECTION("Prevents execution when the rate is exceeded", "[slow][benchmark]") {
+        NodeSource ns(R"(
 SchemaVersion: 2018-07-01
 Actors:
 - Name: One
   Type: IncActor
-  Threads: 2
+  Threads: 50
   Phases:
-    - Repeat: 7
-      Rate: 5 per 4 seconds
-)");
-        auto incProducer = std::make_shared<DefaultActorProducer<IncActor>>("IncActor");
-        int num_threads = 2;
+    - Duration: 520 milliseconds
+      GlobalRate: 1 per 50 milliseconds
+)",
+                      "");
+        auto& config = ns.root();
+        int num_threads = 50;
 
         genny::ActorHelper ah{config, num_threads, {{"IncActor", incProducer}}};
-        auto getCurState = []() {
-            return WorkloadContext::getActorSharedState<IncActor, IncActor::IncCounter>().load();
-        };
 
         auto runInBg = [&ah]() { ah.run(); };
         std::thread t(runInBg);
+        std::this_thread::sleep_for(110ms);
 
-        // Due to the placement of the rate limiter in operator++() in PhaseLoop, the number of
-        // completed iterations is always `rate * n + num_threads` and not an exact multiple of
-        // `rate`.
-        std::this_thread::sleep_for(1s);
-        REQUIRE(getCurState() == (5 + num_threads));
-
-        // Check for rate again after 4 seconds.
-        std::this_thread::sleep_for(4s);
-        REQUIRE(getCurState() == (5 * 2 + num_threads));
+        // after 110ms, exactly 3 invocations should have made it through
+        const auto preJoinState = getCurState();
 
         t.join();
 
-        REQUIRE(getCurState() == 14);
+        REQUIRE(getCurState() == 11);
+        REQUIRE(preJoinState == 3);
     }
+}
 
-    SECTION("Find max performance of rate limiter", "[benchmark]") {
-        YAML::Node config = YAML::Load(R"(
+TEST_CASE("Rate Limiter Try 2", "[slow][benchmark]") {
+    SECTION("Doesn't iterate too many times or sleep unnecessarily") {
+        NodeSource ns(R"(
 SchemaVersion: 2018-07-01
 Actors:
 - Name: One
   Type: IncActor
-  Threads: 100
+  Threads: 5
   Phases:
-    - Duration: 10 seconds
-      Rate: 1 per 100 microseconds
-)");
-        auto incProducer = std::make_shared<DefaultActorProducer<IncActor>>("IncActor");
-        int num_threads = 100;
+  - GlobalRate: 1 per 50 milliseconds
+    Duration: 215 milliseconds
+)",
+                      "");
+        auto& config = ns.root();
+        int num_threads = 5;
 
-        genny::ActorHelper ah{config, num_threads, {{"IncActor", incProducer}}};
-        auto getCurState = []() {
-            return WorkloadContext::getActorSharedState<IncActor, IncActor::IncCounter>().load();
+        auto fun = [&]() -> auto {
+            auto start = std::chrono::steady_clock::now();
+            genny::ActorHelper ah{config, num_threads, {{"IncActor", incProducer}}};
+            ah.run();
+            return std::chrono::steady_clock::now() - start;
         };
 
-        ah.run();
+        resetState();
+        REQUIRE(getCurState() == 0);
 
-        // 10 * 1000 ops per second * 10 seconds.
-        int64_t expected = 10 * 1000 * 10;
+        auto dur = fun();
 
-        // Result is at least 95% of the expected value. There's some uncertainty
-        // due to manually induced jitter.
-        REQUIRE(getCurState() > expected * 0.90);
+        // Shouldn't take longer than an even multiple of the rate-spec
+        REQUIRE(dur.count() <= 280 * 1e6);
+        // Should take at least as long as the Duration
+        REQUIRE(dur.count() >= 215 * 1e6);
 
-        // Result is at most 110% of the expected value. The steady clock
-        // time is cached for threads so threads can run for longer than the
-        // specified duration.
-        REQUIRE(getCurState() < expected * 1.10);
+        const auto endState = getCurState();
 
-        // Print out the result if both REQUIRE pass.
-        BOOST_LOG_TRIVIAL(info) << getCurState();
+        // Should have incremented 4 times in the "perfect" case
+        // but 5 times if there's any timing edge-cases.
+        REQUIRE(endState >= 4);
+        REQUIRE(endState <= 5);
     }
 }
+
+TEST_CASE("Rate Limiter Try 3", "[slow][benchmark]") {
+    SECTION("Doesn't iterate too many times or sleep unnecessarily") {
+        NodeSource ns(R"(
+SchemaVersion: 2018-07-01
+Actors:
+- Name: One
+  Type: IncActor
+  Threads: 3
+  Phases:
+  - GlobalRate: 3 per 500 milliseconds
+    Duration: 1200 milliseconds
+)",
+                      "");
+        auto& config = ns.root();
+        int num_threads = 3;
+
+        auto fun = [&]() -> auto {
+            auto start = std::chrono::steady_clock::now();
+            genny::ActorHelper ah{config, num_threads, {{"IncActor", incProducer}}};
+            ah.run();
+            return std::chrono::steady_clock::now() - start;
+        };
+
+        resetState();
+        REQUIRE(getCurState() == 0);
+
+        auto dur = fun();
+
+        const auto endState = getCurState();
+
+        REQUIRE(endState == 9);
+    }
+}
+
+
 }  // namespace
 }  // namespace genny::testing

@@ -29,46 +29,40 @@
 #include <gennylib/Cast.hpp>
 #include <gennylib/context.hpp>
 
-#include <value_generators/value_generators.hpp>
+#include <value_generators/DocumentGenerator.hpp>
 
 namespace genny::actor {
 
 /** @private */
-using index_type = std::pair<value_generators::UniqueExpression,
-                             std::optional<value_generators::UniqueExpression>>;
+using index_type = std::pair<DocumentGenerator, std::optional<DocumentGenerator>>;
 
 /** @private */
 struct Loader::PhaseConfig {
-    PhaseConfig(PhaseContext& context, mongocxx::pool::entry& client, uint thread)
-        : database{(*client)[context.get<std::string>("Database")]},
+    PhaseConfig(PhaseContext& context, mongocxx::pool::entry& client, uint thread, ActorId id)
+        : database{(*client)[context["Database"].to<std::string>()]},
           // The next line uses integer division. The Remainder is accounted for below.
-          numCollections{context.get<IntegerSpec, true>("CollectionCount") /
-                         context.get<IntegerSpec, true>("Threads")},
-          numDocuments{context.get<IntegerSpec, true>("DocumentCount")},
-          batchSize{context.get<IntegerSpec, true>("BatchSize")},
-          documentExpr{value_generators::Expression::parseOperand(context.get("Document"))},
+          numCollections{context["CollectionCount"].to<IntegerSpec>() /
+                         context["Threads"].to<IntegerSpec>()},
+          numDocuments{context["DocumentCount"].to<IntegerSpec>()},
+          batchSize{context["BatchSize"].to<IntegerSpec>()},
+          documentExpr{context["Document"].to<DocumentGenerator>(context, id)},
           collectionOffset{numCollections * thread} {
-        auto indexNodes = context.get("Indexes");
-        for (auto indexNode : indexNodes) {
-            indexes.emplace_back(
-                value_generators::Expression::parseOperand(indexNode["keys"]),
-                indexNode["options"]
-                    ? std::make_optional(
-                          value_generators::Expression::parseOperand(indexNode["options"]))
-                    : std::nullopt);
+        auto& indexNodes = context["Indexes"];
+        for (auto [k, indexNode] : indexNodes) {
+            indexes.emplace_back(indexNode["keys"].to<DocumentGenerator>(context, id),
+                                 indexNode["options"].maybe<DocumentGenerator>(context, id));
         }
-        if (thread == context.get<int>("Threads") - 1) {
+        if (thread == context["Threads"].to<int>() - 1) {
             // Pick up any extra collections left over by the division
-            numCollections += context.get<uint>("CollectionCount") % context.get<uint>("Threads");
+            numCollections += context["CollectionCount"].to<uint>() % context["Threads"].to<uint>();
         }
     }
 
     mongocxx::database database;
-
     int64_t numCollections;
     int64_t numDocuments;
     int64_t batchSize;
-    value_generators::UniqueExpression documentExpr;
+    DocumentGenerator documentExpr;
     std::vector<index_type> indexes;
     int64_t collectionOffset;
 };
@@ -92,7 +86,7 @@ void genny::actor::Loader::run() {
                         auto docs = std::vector<bsoncxx::document::view_or_value>{};
                         docs.reserve(remainingInserts);
                         for (uint j = 0; j < numberToInsert; j++) {
-                            auto newDoc = config->documentExpr->evaluate(_rng).getDocument();
+                            auto newDoc = config->documentExpr();
                             docs.push_back(std::move(newDoc));
                         }
                         {
@@ -107,11 +101,11 @@ void genny::actor::Loader::run() {
                 // For each index
                 for (auto&& [keys, options] : config->indexes) {
                     // Make the index
-                    auto indexKey = keys->evaluate(_rng).getDocument();
+                    auto indexKey = keys();
                     BOOST_LOG_TRIVIAL(debug)
                         << "Building index " << bsoncxx::to_json(indexKey.view());
                     if (options) {
-                        auto indexOptions = (*options)->evaluate(_rng).getDocument();
+                        auto indexOptions = (*options)();
                         BOOST_LOG_TRIVIAL(debug)
                             << "With options " << bsoncxx::to_json(indexOptions.view());
                         auto indexOpCtx = _indexBuild.start();
@@ -131,22 +125,21 @@ void genny::actor::Loader::run() {
 
 Loader::Loader(genny::ActorContext& context, uint thread)
     : Actor(context),
-      _rng{context.workload().createRNG()},
       _totalBulkLoad{context.operation("TotalBulkInsert", Loader::id())},
       _individualBulkLoad{context.operation("IndividualBulkInsert", Loader::id())},
       _indexBuild{context.operation("IndexBuild", Loader::id())},
       _client{std::move(context.client())},
-      _loop{context, _client, thread} {}
+      _loop{context, _client, thread, Loader::id()} {}
 
 class LoaderProducer : public genny::ActorProducer {
 public:
     LoaderProducer(const std::string_view& name) : ActorProducer(name) {}
     genny::ActorVector produce(genny::ActorContext& context) {
-        if (context.get<std::string>("Type") != "Loader") {
+        if (context["Type"].to<std::string>() != "Loader") {
             return {};
         }
         genny::ActorVector out;
-        for (uint i = 0; i < context.get<int>("Threads"); ++i) {
+        for (uint i = 0; i < context["Threads"].to<int>(); ++i) {
             out.emplace_back(std::make_unique<genny::actor::Loader>(context, i));
         }
         return out;

@@ -16,172 +16,348 @@
 #define HEADER_1EB08DF5_3853_4277_8B3D_4542552B8154_INCLUDED
 
 #include <iostream>
+#include <map>
+
+#include <boost/log/trivial.hpp>
 
 #include <metrics/metrics.hpp>
 
 namespace genny::metrics {
 
 /**
- * A Reporter is the only object in the system that
+ * @namespace genny::metrics::v1 this namespace is private and only intended to be used by genny's
+ * own internals. No types from the genny::metrics::v1 namespace should ever be typed directly into
+ * the implementation of an actor.
+ */
+namespace v1 {
+
+// Used in the implementation of outputting metrics. Only at the top of the file
+// because C++ is a delight.
+//
+// This has to be inline because it'll be included in multiple translation-units.
+// We could just have the decl here and make a separate impl .cpp file, but the
+// rest of the "metrics" module is header-only and it seems silly to kill that
+// just for a single function. If additional 'inline' functions abound in the
+// future, please move to a .cpp file to decrease compile- and link-times.
+inline void logMaybe(unsigned long long iteration,
+                     const std::string& actorName,
+                     const std::string& opName) {
+    // Log progress every 100e6 iterations
+    if (iteration % (100 * 1000 * 1000) == 0) {
+        BOOST_LOG_TRIVIAL(info) << "Processed " << iteration << " metrics. Processing " << actorName
+                                << "." << opName;
+    }
+}
+
+/**
+ * A ReporterT is the only object in the system that
  * has read access to metrics data-points. It is not
  * intended to be used by actors, only by drivers.
  *
- * The Reporter is given read-access to metrics data
+ * The ReporterT is given read-access to metrics data
  * for the purposes of reporting data.
  * This class is not ABI-safe.
  *
  * @private
  */
-class Reporter {
+template <typename MetricsClockSource>
+class ReporterT final {
 
 public:
-    constexpr explicit Reporter(const Registry& registry) : _registry{std::addressof(registry)} {}
+    constexpr explicit ReporterT(const v1::RegistryT<MetricsClockSource>& registry)
+        : _registry{std::addressof(registry)} {}
 
-    /** @return how many distinct gauges were registered */
-    auto getGaugeCount(v1::Permission perm = {}) const {
-        auto& x = _registry->getGauges(perm);
-        return std::distance(x.begin(), x.end());
-    }
+private:
+    struct SystemClockSource {
+        using clock = std::chrono::system_clock;
 
-    /** @return how many gauge data-points were recorded */
-    long getGaugePointsCount(v1::Permission perm = {}) const {
-        return dataPointsCount(_registry->getGauges(perm), perm);
-    }
+        static std::chrono::time_point<clock> now() {
+            return clock::now();
+        }
+    };
 
-    /** @return how many distinct timers were registered */
-    auto getTimerCount(v1::Permission perm = {}) const {
-        auto& x = _registry->getTimers(perm);
-        return std::distance(x.begin(), x.end());
-    }
-
-    /** @return how many timer data-points were recorded */
-    long getTimerPointsCount(v1::Permission perm = {}) const {
-        return dataPointsCount(_registry->getTimers(perm), perm);
-    }
-
-    /** @return how many counters were registered */
-    auto getCounterCount(v1::Permission perm = {}) const {
-        auto& x = _registry->getCounters(perm);
-        return std::distance(x.begin(), x.end());
-    }
-
-    /** @return how many counter data-points were recorded */
-    long getCounterPointsCount(v1::Permission perm = {}) const {
-        return dataPointsCount(_registry->getCounters(perm), perm);
-    }
-
+public:
     /**
      * @param out print a human-readable listing of all
      *            data-points to this ostream.
-     * @param metricsFormat the format to use. Either "csv" or "sys-perf".
-     * @param perm passkey permission (must be friends with metrics::Registry)
+     * @param metricsFormat the format to use. Must be "csv".
      */
-    void report(std::ostream& out,
-                const std::string& metricsFormat,
-                v1::Permission perm = {}) const {
+    template <typename ReporterClockSource = SystemClockSource>
+    void report(std::ostream& out, const std::string& metricsFormat) const {
+        v1::Permission perm;
+
+        BOOST_LOG_TRIVIAL(debug) << "Beginning metrics reporting.";
+
         // should these values come from the registry, and should they be recorded at
         // time of registry-creation?
-        auto systemTime = std::chrono::system_clock::now().time_since_epoch().count();
-        auto metricsTime = _registry->now(perm).time_since_epoch().count();
+        auto systemTime = nanosecondsCount(ReporterClockSource::now().time_since_epoch());
+        auto metricsTime = nanosecondsCount(_registry->now(perm).time_since_epoch());
 
         // if this lives more than a hot-second, put the formats into an enum and do this
         // check & throw in the driver/main program
         if (metricsFormat == "csv") {
-            return reportCsv(out, systemTime, metricsTime, perm);
-        } else if (metricsFormat == "sys-perf") {
-            return reportSysperf(out, systemTime, metricsTime, perm);
+            reportLegacyCsv(out, systemTime, metricsTime, perm);
+        } else if (metricsFormat == "cedar-csv") {
+            reportCedarCsv(out, systemTime, metricsTime, perm);
         } else {
             throw std::invalid_argument(std::string("Unknown metrics format ") + metricsFormat);
         }
+
+        BOOST_LOG_TRIVIAL(debug) << "Finished metrics reporting.";
     }
 
 private:
-    template <class T>
-    class TD;
+    using duration = typename MetricsClockSource::duration;
 
-    void reportSysperf(std::ostream& out,
-                       long long int,
-                       long long int,
-                       const v1::Permission& perm) const {
-
-        // TODO: Followup from TIG-1070, make this report real data; for now just report
-        //       the number of timer data-points that we saw.
-
-        genny::metrics::clock::duration total;
-        for (const auto& [name, timer] : _registry->getTimers(perm)) {
-            auto& vals = timer.getTimeSeries(perm).getVals(perm);
-            for (const auto& [when, dur] : vals) {
-                total += dur;
-            }
-        }
-
-        auto micros = std::chrono::duration_cast<std::chrono::microseconds>(total);
-
-        out << R"({"storageEngine":"wiredTiger", "results":[{
- "name":"dummy_inserts", "workload":"genny_dummy_workload",
- "start":1537815283.968272, "end":1537817860.423682,
- "results":{"4":{"ops_per_sec":)"
-            << micros.count() << R"(, "ops_per_sec_values":[)" << micros.count() << R"(]}}}]}
-)";
-    }
-    void reportCsv(std::ostream& out,
-                   long long int systemTime,
-                   long long int metricsTime,
-                   const v1::Permission& perm) const {
+    void reportLegacyCsv(std::ostream& out,
+                         long long systemTime,
+                         long long metricsTime,
+                         v1::Permission perm) const {
         out << "Clocks" << std::endl;
-        doClocks(out, systemTime, metricsTime);
+        writeClocks(out, systemTime, metricsTime);
         out << std::endl;
 
         out << "Counters" << std::endl;
-        doReport(out, _registry->getCounters(perm), perm);
+        writeGennyActiveActorsMetric(out, perm);
+        writeMetricValuesLegacy(
+            out, "_bytes", perm, [](const OperationEventT<MetricsClockSource>& event) {
+                return event.size;
+            });
+        writeMetricValuesLegacy(
+            out, "_docs", perm, [](const OperationEventT<MetricsClockSource>& event) {
+                return event.ops;
+            });
+        writeMetricValuesLegacy(
+            out, "_iters", perm, [](const OperationEventT<MetricsClockSource>& event) {
+                return event.iters;
+            });
         out << std::endl;
 
         out << "Gauges" << std::endl;
-        doReport(out, _registry->getGauges(perm), perm);
         out << std::endl;
 
         out << "Timers" << std::endl;
-        doReport(out, _registry->getTimers(perm), perm);
+        writeGennySetupMetric(out, perm);
+        writeMetricValuesLegacy(
+            out, "_timer", perm, [](const OperationEventT<MetricsClockSource>& event) {
+                return nanosecondsCount(static_cast<duration>(event.duration));
+            });
         out << std::endl;
     }
 
-    void doClocks(std::ostream& out, long long int systemTime, long long int metricsTime) const {
+    void writeClocks(std::ostream& out, long long systemTime, long long metricsTime) const {
         out << "SystemTime"
             << "," << systemTime << std::endl;
         out << "MetricsTime"
             << "," << metricsTime << std::endl;
     }
 
-    /**
-     * Prints a map<string,X> where X is a CounterImpl, GaugeImpl, etc.
-     * @tparam X is a map<string,V> where V has getTimeSeries() that exposes a metrics::TimeSeries
-     */
-    template <typename X>
-    static void doReport(std::ostream& out,
-                         const X& haveTimeSeries,
-                         genny::metrics::v1::Permission perm) {
-        for (const auto& c : haveTimeSeries) {
-            for (const auto& v : c.second.getTimeSeries(perm).getVals(perm)) {
-                out << v.first.time_since_epoch().count() << "," << c.first << "," << v.second
-                    << std::endl;
+    static std::ostream& writeMetricNameLegacy(std::ostream& out,
+                                               ActorId actorId,
+                                               const std::string& actorName,
+                                               const std::string& opName) {
+        out << actorName << ".id-" << std::to_string(actorId) << "." << opName;
+        return out;
+    }
+
+    void writeMetricValuesLegacy(
+        std::ostream& out,
+        const std::string& suffix,
+        Permission perm,
+        std::function<count_type(const OperationEventT<MetricsClockSource>&)> getter) const {
+
+        size_t iter = 0;
+
+        for (const auto& [actorName, opsByType] : _registry->getOps(perm)) {
+            if (actorName == "Genny") {
+                // Metrics created by the DefaultDriver are handled separately in order to preserve
+                // the legacy "csv" format.
+                continue;
+            }
+
+            for (const auto& [opName, opsByThread] : opsByType) {
+                for (const auto& [actorId, op] : opsByThread) {
+                    for (const auto& event : op.getEvents()) {
+                        out << nanosecondsCount(event.first.time_since_epoch());
+                        out << ",";
+                        writeMetricNameLegacy(out, actorId, actorName, opName) << suffix;
+                        out << ",";
+                        out << getter(event.second);
+                        out << std::endl;
+
+                        logMaybe(++iter, actorName, opName);
+                    }
+                }
             }
         }
     }
 
+    void writeGennySetupMetric(std::ostream& out, Permission perm) const {
+        const auto& ops = _registry->getOps(perm);
+
+        auto gennyOpsIt = ops.find("Genny");
+        if (gennyOpsIt == ops.end()) {
+            // We permit the Genny.Setup metric to be omitted to make unit testing easier.
+            return;
+        }
+
+        auto setupIt = gennyOpsIt->second.find("Setup");
+        if (setupIt == gennyOpsIt->second.end()) {
+            // We permit the Genny.Setup metric to be omitted to make unit testing easier.
+            return;
+        }
+
+        for (const auto& event : setupIt->second.at(0u).getEvents()) {
+            out << nanosecondsCount(event.first.time_since_epoch());
+            out << ",";
+            out << "Genny.Setup";
+            out << ",";
+            out << nanosecondsCount(static_cast<duration>(event.second.duration));
+            out << std::endl;
+        }
+    }
+
+    void writeGennyActiveActorsMetric(std::ostream& out, Permission perm) const {
+        const auto& ops = _registry->getOps(perm);
+
+        auto gennyOpsIt = ops.find("Genny");
+        if (gennyOpsIt == ops.end()) {
+            // We permit the Genny.ActiveActors metric to be omitted to make unit testing easier.
+            return;
+        }
+
+        auto startedActorsIt = gennyOpsIt->second.find("ActorStarted");
+        if (startedActorsIt == gennyOpsIt->second.end()) {
+            // We permit the Genny.ActiveActors metric to be omitted to make unit testing easier.
+            return;
+        }
+
+        const auto& startedActors = startedActorsIt->second.at(0u);
+        const auto& finishedActors = gennyOpsIt->second.find("ActorFinished")->second.at(0u);
+
+        auto startedEventIt = startedActors.getEvents().begin();
+        auto finishedEventIt = finishedActors.getEvents().begin();
+
+        auto numActors = 0;
+        auto writeMetric = [&](const typename MetricsClockSource::time_point& when) {
+            out << nanosecondsCount(when.time_since_epoch());
+            out << ",";
+            out << "Genny.ActiveActors";
+            out << ",";
+            out << numActors;
+            out << std::endl;
+        };
+
+        // The termination condition of the while-loop is based only on `finishedActors` because
+        // there should always be as many ActorFinished events as there are ActorStarted events and
+        // an actor can only be finished after it has been started.
+        while (finishedEventIt != finishedActors.getEvents().end()) {
+            if (startedEventIt == startedActors.getEvents().end() ||
+                startedEventIt->first > finishedEventIt->first) {
+                numActors -= finishedEventIt->second.ops;
+                writeMetric(finishedEventIt->first);
+                ++finishedEventIt;
+            } else if (startedEventIt->first < finishedEventIt->first) {
+                numActors += startedEventIt->second.ops;
+                writeMetric(startedEventIt->first);
+                ++startedEventIt;
+            } else {
+                // startedEventIt->first == finishedEventIt->first is a violation of the monotonic
+                // clock property. This would only happen as a result of a bug in a unit test.
+                throw std::logic_error{
+                    "Expected time to advance between one actor starting and another actor"
+                    " finishing"};
+            }
+        }
+    }
+
+    void reportCedarCsv(std::ostream& out,
+                        long long systemTime,
+                        long long metricsTime,
+                        v1::Permission perm) const {
+        out << "Clocks" << std::endl;
+        out << "clock,nanoseconds" << std::endl;
+        writeClocks(out, systemTime, metricsTime);
+        out << std::endl;
+
+        // We use an ordered map here to avoid defining a custom hash function for
+        // std::pair<std::string, std::string>. There aren't likely to be many (Actor, Operation)
+        // combinations for this to matter too much in terms of efficiency.
+        auto opThreadCounts = std::map<std::pair<std::string, std::string>, size_t>{};
+        out << "OperationThreadCounts" << std::endl;
+        out << "actor,operation,workers" << std::endl;
+        for (const auto& [actorName, opsByType] : _registry->getOps(perm)) {
+            for (const auto& [opName, opsByThread] : opsByType) {
+                if (shouldSkipReporting(actorName, opName)) {
+                    continue;
+                }
+
+                opThreadCounts[std::make_pair(actorName, opName)] += opsByThread.size();
+            }
+        }
+        for (const auto& [key, count] : opThreadCounts) {
+            const auto& [actorName, opName] = key;
+            out << actorName << ",";
+            out << opName << ",";
+            out << count << std::endl;
+        }
+        out << std::endl;
+
+        unsigned long long iter = 0;
+
+        out << "Operations" << std::endl;
+        out << "timestamp,actor,thread,operation,duration,outcome,n,ops,errors,size" << std::endl;
+        for (const auto& [actorName, opsByType] : _registry->getOps(perm)) {
+            for (const auto& [opName, opsByThread] : opsByType) {
+                if (shouldSkipReporting(actorName, opName)) {
+                    continue;
+                }
+
+                for (const auto& [actorId, op] : opsByThread) {
+                    for (const auto& event : op.getEvents()) {
+                        out << nanosecondsCount(event.first.time_since_epoch()) << ",";
+                        out << actorName << ",";
+                        out << actorId << ",";
+                        out << opName << ",";
+                        out << nanosecondsCount(static_cast<duration>(event.second.duration))
+                            << ",";
+                        out << static_cast<unsigned>(event.second.outcome) << ",";
+                        out << event.second.iters << ",";
+                        out << event.second.ops << ",";
+                        out << event.second.errors << ",";
+                        out << event.second.size << std::endl;
+
+                        logMaybe(++iter, actorName, opName);
+                    }
+                }
+            }
+        }
+    }
+
+    static bool shouldSkipReporting(const std::string& actorName, const std::string& opName) {
+        // The cedar-csv metrics format ignores the Genny.ActorStarted and Genny.ActorFinished
+        // operations reported by the DefaultDriver because the OperationThreadCounts section
+        // effectively tracks the number of concurrent actors and that number isn't meaningfully
+        // changing over time.
+        return actorName == "Genny" && (opName == "ActorStarted" || opName == "ActorFinished");
+    }
 
     /**
-     * @return the number of data-points held by a map with values CounterImpl, GaugeImpl, etc.
+     * @return the number of nanoseconds represented by the duration.
+     * @param dur the duration
+     * @tparam DurationIn the duration's type
      */
-    template <class X>
-    static long dataPointsCount(const X& x, genny::metrics::v1::Permission perm) {
-        auto out = 0L;
-        for (const auto& v : x) {
-            out += v.second.getTimeSeries(perm).getDataPointCount(perm);
-        }
-        return out;
+    template <typename DurationIn>
+    static count_type nanosecondsCount(const DurationIn& dur) {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(dur).count();
     }
-    const Registry* _registry;
+
+    const RegistryT<MetricsClockSource>* const _registry;
 };
+
+}  // namespace v1
+
+using Reporter = v1::ReporterT<Registry::clock>;
 
 }  // namespace genny::metrics
 

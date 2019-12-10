@@ -27,7 +27,7 @@
 #include <gennylib/Cast.hpp>
 #include <gennylib/context.hpp>
 
-#include <value_generators/value_generators.hpp>
+#include <value_generators/DocumentGenerator.hpp>
 
 namespace genny::actor {
 
@@ -36,65 +36,53 @@ struct InsertRemove::PhaseConfig {
     PhaseConfig(mongocxx::database db,
                 const std::string collection_name,
                 genny::DefaultRandom& rng,
-                int id,
-                ExecutionStrategy::RunOptions insertOpts = {},
-                ExecutionStrategy::RunOptions removeOpts = {})
+                int id)
         : database{db},
           collection{db[collection_name]},
           myDoc(bsoncxx::builder::stream::document{} << "_id" << id
-                                                     << bsoncxx::builder::stream::finalize),
-          insertOptions{std::move(insertOpts)},
-          removeOptions{std::move(removeOpts)} {}
+                                                     << bsoncxx::builder::stream::finalize) {}
 
     PhaseConfig(PhaseContext& context,
                 genny::DefaultRandom& rng,
                 mongocxx::pool::entry& client,
                 int id)
-        : PhaseConfig(
-              (*client)[context.get<std::string>("Database")],
-              context.get<std::string>("Collection"),
-              rng,
-              id,
-              ExecutionStrategy::getOptionsFrom(context, "InsertStage", "ExecutionsStrategy"),
-              ExecutionStrategy::getOptionsFrom(context, "RemoveStage", "ExecutionsStrategy")) {}
+        : PhaseConfig((*client)[context["Database"].to<std::string>()],
+                      context["Collection"].to<std::string>(),
+                      rng,
+                      id) {}
 
     mongocxx::database database;
     mongocxx::collection collection;
     bsoncxx::document::value myDoc;
-
-    ExecutionStrategy::RunOptions insertOptions;
-    ExecutionStrategy::RunOptions removeOptions;
 };
 
 void InsertRemove::run() {
     for (auto&& config : _loop) {
         for (auto&& _ : config) {
-            BOOST_LOG_TRIVIAL(info) << " Inserting and then removing";
-            _insertStrategy.run(
-                [&](metrics::OperationContext& ctx) {
-                    // First we insert
-                    auto view = config->myDoc.view();
-                    config->collection.insert_one(view);
-                    ctx.addBytes(view.length());
-                    ctx.addOps(1);
-                },
-                config->insertOptions);
-            _removeStrategy.run(
-                [&](metrics::OperationContext& ctx) {
-                    // Then we remove
-                    auto results = config->collection.delete_many(config->myDoc.view());
-                    ctx.addOps(1);
-                },
-                config->removeOptions);
+            BOOST_LOG_TRIVIAL(debug) << " Inserting and then removing";
+
+            // First we insert
+            auto insertCtx = _insert.start();
+            auto view = config->myDoc.view();
+            config->collection.insert_one(view);
+            insertCtx.addBytes(view.length());
+            insertCtx.addDocuments(1);
+            insertCtx.success();
+
+            // Then we remove
+            auto removeCtx = _remove.start();
+            auto results = config->collection.delete_many(config->myDoc.view());
+            removeCtx.addDocuments(1);
+            removeCtx.success();
         }
     }
 }
 
 InsertRemove::InsertRemove(genny::ActorContext& context)
     : Actor(context),
-      _rng{context.workload().createRNG()},
-      _insertStrategy{context.operation("Insert", InsertRemove::id())},
-      _removeStrategy{context.operation("Remove", InsertRemove::id())},
+      _rng{context.workload().getRNGForThread(InsertRemove::id())},
+      _insert{context.operation("Insert", InsertRemove::id())},
+      _remove{context.operation("Remove", InsertRemove::id())},
       _client{std::move(context.client())},
       _loop{context, _rng, _client, InsertRemove::id()} {}
 

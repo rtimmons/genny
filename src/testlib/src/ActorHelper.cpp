@@ -17,6 +17,8 @@
 #include <thread>
 #include <vector>
 
+#include <boost/exception/diagnostic_information.hpp>
+
 #include <gennylib/Orchestrator.hpp>
 #include <gennylib/context.hpp>
 
@@ -25,7 +27,7 @@
 
 namespace genny {
 
-ActorHelper::ActorHelper(const YAML::Node& config,
+ActorHelper::ActorHelper(const Node& config,
                          int tokenCount,
                          Cast::List castInitializer,
                          const std::string& uri,
@@ -40,11 +42,16 @@ ActorHelper::ActorHelper(const YAML::Node& config,
     _orchestrator->addRequiredTokens(tokenCount);
 
     _cast = std::make_unique<Cast>(castInitializer);
-    _wlc = std::make_unique<WorkloadContext>(
-        config, *_registry, *_orchestrator, uri, *_cast, apmCallback);
+    try {
+        _wlc = std::make_unique<WorkloadContext>(
+            config, *_registry, *_orchestrator, uri, *_cast, apmCallback);
+    } catch (const std::exception& x) {
+        BOOST_LOG_TRIVIAL(fatal) << boost::diagnostic_information(x, true);
+        throw;
+    }
 }
 
-ActorHelper::ActorHelper(const YAML::Node& config,
+ActorHelper::ActorHelper(const Node& config,
                          int tokenCount,
                          const std::string& uri,
                          v1::PoolManager::OnCommandStartCallback apmCallback) {
@@ -57,8 +64,13 @@ ActorHelper::ActorHelper(const YAML::Node& config,
     _orchestrator = std::make_unique<genny::Orchestrator>();
     _orchestrator->addRequiredTokens(tokenCount);
 
-    _wlc = std::make_unique<WorkloadContext>(
-        config, *_registry, *_orchestrator, uri, globalCast(), apmCallback);
+    try {
+        _wlc = std::make_unique<WorkloadContext>(
+            config, *_registry, *_orchestrator, uri, globalCast(), apmCallback);
+    } catch (const std::exception& x) {
+        BOOST_LOG_TRIVIAL(fatal) << boost::diagnostic_information(x, true);
+        throw;
+    }
 }
 
 void ActorHelper::run() {
@@ -80,7 +92,16 @@ void ActorHelper::doRunThreaded(const WorkloadContext& wl) {
     std::transform(cbegin(wl.actors()),
                    cend(wl.actors()),
                    std::back_inserter(threads),
-                   [&](const auto& actor) { return std::thread{[&]() { actor->run(); }}; });
+                   [&](const auto& actor) {
+                       return std::thread{[&]() {
+                           try {
+                               actor->run();
+                           } catch (const boost::exception& b) {
+                               BOOST_LOG_TRIVIAL(error) << boost::diagnostic_information(b, true);
+                               throw;
+                           }
+                       }};
+                   });
 
     for (auto& thread : threads)
         thread.join();

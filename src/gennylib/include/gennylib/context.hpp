@@ -18,24 +18,26 @@
 #include <cassert>
 #include <map>
 #include <memory>
+#include <sstream>
 #include <string>
+#include <type_traits>
+#include <typeinfo>
 #include <unordered_map>
 #include <vector>
 
 #include <boost/noncopyable.hpp>
+#include <boost/throw_exception.hpp>
 
 #include <mongocxx/pool.hpp>
-
-#include <yaml-cpp/yaml.h>
 
 #include <gennylib/Actor.hpp>
 #include <gennylib/ActorProducer.hpp>
 #include <gennylib/ActorVector.hpp>
 #include <gennylib/Cast.hpp>
 #include <gennylib/InvalidConfigurationException.hpp>
+#include <gennylib/Node.hpp>
 #include <gennylib/Orchestrator.hpp>
 #include <gennylib/conventions.hpp>
-#include <gennylib/v1/ConfigNode.hpp>
 #include <gennylib/v1/GlobalRateLimiter.hpp>
 #include <gennylib/v1/PoolManager.hpp>
 
@@ -52,6 +54,37 @@
  * Please see the documentation below on WorkloadContext, ActorContext, and PhaseContext.
  */
 namespace genny {
+
+namespace v1 {
+class HasNode {
+public:
+    explicit HasNode(const Node& node) : _node{node} {}
+
+    template <typename... Args>
+    auto& operator[](Args&&... args) const {
+        return this->_node.operator[](std::forward<Args>(args)...);
+    }
+
+    template <typename T, typename F = std::function<T(const Node&)>>
+    auto getPlural(
+        const std::string& singular,
+        const std::string& plural,
+        // Default conversion function is `node.to<T>()`.
+        F&& f = [](const Node& n) { return n.to<T>(); }) {
+        return std::move(this->_node.getPlural<T, F>(singular, plural, std::forward<F>(f)));
+    }
+
+    auto path() const {
+        return _node.path();
+    }
+
+protected:
+    const Node& _node;
+};
+
+}  // namespace v1
+
+class WorkloadContext;
 
 /**
  * Represents the top-level/"global" configuration and context for configuring actors.
@@ -92,7 +125,7 @@ namespace genny {
  *     std::optional<int> maybeInt = context.get<int,false>("Actors", 0, "Count");
  * ```
  */
-class WorkloadContext : public v1::ConfigNode {
+class WorkloadContext : public v1::HasNode {
 public:
     /**
      * @param node top-level (file-level) YAML node
@@ -102,7 +135,7 @@ public:
      * @param cast source of Actors to use. Actors are constructed
      * from the cast at construction-time.
      */
-    WorkloadContext(const YAML::Node& node,
+    WorkloadContext(const Node& node,
                     metrics::Registry& registry,
                     Orchestrator& orchestrator,
                     const std::string& mongoUri,
@@ -123,10 +156,22 @@ public:
     }
 
     /**
-     * @return a new seeded random number generator.
-     * @warning This should only be called during construction to ensure reproducibility.
+     * @return
+     *   *the* DefaultRandom instance for the given `id`.
+     *   Note that `DefaultRandom` is *not* thread-safe so two Actors
+     *   should not use the same `DefaultRandom` at the same time.
+     *   If you use `YourActorClass::id()` for `id` you'll be fine.
      */
-    DefaultRandom createRNG();
+    DefaultRandom& getRNGForThread(ActorId id);
+
+    /**
+     * @return if we're done constructing the WorkloadContext.
+     * Beyond this point no further accesses should be done to various *Context
+     * methods (this is loosely enforced).
+     */
+    bool isDone() const {
+        return _done;
+    }
 
     /**
      * Get a WorkloadContext-unique ActorId
@@ -188,7 +233,10 @@ public:
      *
      * @warning
      *   This is intended to only be used internally. It is called
-     *   by PhaseLoop in response to the `Rate:` yaml keyword.
+     *   by PhaseLoop in response to the `GlobalRate:` yaml keyword.
+     *   Additionally it cannot be called after the WorkloadContext
+     *   has been constructed: it can only be called during Actors'
+     *   constructors, etc.
      *
      * @param name
      *   name/id to use
@@ -205,6 +253,7 @@ public:
 
 private:
     friend class ActorContext;
+    friend class PhaseContext;
 
     // helper methods used during construction
     static ActorVector _constructActors(const Cast& cast,
@@ -227,6 +276,8 @@ private:
     // Actors should always be constructed in a single-threaded context.
     // That said, atomic integral types are very cheap to work with.
     std::atomic<ActorId> _nextActorId{0};
+
+    std::unordered_map<ActorId, DefaultRandom> _rngRegistry;
 
     std::unordered_map<std::string, std::unique_ptr<v1::GlobalRateLimiter>> _rateLimiters;
 };
@@ -264,12 +315,10 @@ class PhaseContext;
  * auto name = cx.get<std::string>("Name");
  * ```
  */
-class ActorContext final : public v1::ConfigNode {
+class ActorContext final : public v1::HasNode {
 public:
-    ActorContext(const YAML::Node& node, WorkloadContext& workloadContext)
-        : ConfigNode(node, std::addressof(workloadContext)),
-          _workload{&workloadContext},
-          _phaseContexts{} {
+    ActorContext(const Node& node, WorkloadContext& workloadContext)
+        : v1::HasNode{node}, _workload{&workloadContext}, _phaseContexts{} {
         _phaseContexts = constructPhaseContexts(_node, this);
     }
 
@@ -342,6 +391,10 @@ public:
         return _phaseContexts;
     }
 
+    DefaultRandom& rng(ActorId id) {
+        return this->workload().getRNGForThread(id);
+    }
+
     /**
      * @return a pool from the "default" MongoDB connection-pool.
      * @throws InvalidConfigurationException if no connections available.
@@ -351,72 +404,22 @@ public:
         return this->_workload->client(std::forward<Args>(args)...);
     }
 
-    // <Forwarding to delegates>
-
     /**
-     * Convenience method for creating a metrics::Timer.
+     * Convenience method for creating a metrics::Operation that's unique for this actor and thread.
      *
-     * @param operationName
-     *   the name of the thing being timed.
-     *   Will automatically add prefixes to make the full name unique
-     *   across Actors and threads.
-     * @param id the id of this Actor, if any.
+     * @param operationName the name of the operation being run.
+     * @param id the id of this Actor.
      */
-    auto timer(const std::string& operationName, ActorId id = 0u) const {
-        auto name = this->metricsName(operationName, id);
-        return this->_workload->_registry->timer(name);
+    auto operation(const std::string& operationName, ActorId id) const {
+        return this->_workload->_registry->operation(
+            this->_node["Name"].to<std::string>(), operationName, id);
     }
-
-    /**
-     * Convenience method for creating a metrics::Gauge.
-     *
-     * @param operationName
-     *   the name of the thing being gauged.
-     *   Will automatically add prefixes to make the full name unique
-     *   across Actors and threads.
-     * @param id the id of this Actor, if any.
-     */
-    auto gauge(const std::string& operationName, ActorId id = 0u) const {
-        auto name = this->metricsName(operationName, id);
-        return this->_workload->_registry->gauge(name);
-    }
-
-    /**
-     * Convenience method for creating a metrics::Counter.
-     *
-     *
-     * @param operationName
-     *   the name of the thing being counted.
-     *   Will automatically add prefixes to make the full name unique
-     *   across Actors and threads.
-     * @param id the id of this Actor, if any.
-     */
-    auto counter(const std::string& operationName, ActorId id = 0u) const {
-        auto name = this->metricsName(operationName, id);
-        return this->_workload->_registry->counter(name);
-    }
-
-    auto operation(const std::string& operationName, ActorId id = 0u) const {
-        auto name = this->metricsName(operationName, id);
-        return this->_workload->_registry->operation(name);
-    }
-
-    // </Forwarding to delegates>
 
 private:
-    /**
-     * Apply metrics names conventions based on configuration.
-     *
-     * @param operation base name of a metrics object e.g. "inserts"
-     * @param id the id of the Actor owning the object.
-     * @return the fully-qualified metrics name e.g. "MyActor.0.inserts".
-     */
-    std::string metricsName(const std::string& operation, ActorId id) const {
-        return this->get<std::string>("Name") + ".id-" + std::to_string(id) + "." + operation;
-    }
-
     static std::unordered_map<genny::PhaseNumber, std::unique_ptr<PhaseContext>>
-    constructPhaseContexts(const YAML::Node&, ActorContext*);
+
+    constructPhaseContexts(const Node&, ActorContext*);
+
     WorkloadContext* _workload;
     std::unordered_map<PhaseNumber, std::unique_ptr<PhaseContext>> _phaseContexts;
 };
@@ -424,17 +427,20 @@ private:
 /**
  * Represents each `Phase:` block in the YAML configuration.
  */
-class PhaseContext final : public v1::ConfigNode {
-
+class PhaseContext final : public v1::HasNode {
 public:
-    PhaseContext(const YAML::Node& node, const ActorContext& actorContext)
-        : ConfigNode(node, std::addressof(actorContext)), _actor{std::addressof(actorContext)} {}
+    PhaseContext(const Node& node, PhaseNumber phaseNumber, ActorContext& actorContext)
+        : v1::HasNode{node}, _actor{std::addressof(actorContext)}, _phaseNumber(phaseNumber) {}
 
     // no copy or move
     PhaseContext(PhaseContext&) = delete;
     void operator=(PhaseContext&) = delete;
     PhaseContext(PhaseContext&&) = delete;
     void operator=(PhaseContext&&) = delete;
+
+    DefaultRandom& rng(ActorId id) {
+        return this->_actor->rng(id);
+    }
 
     /**
      * Called in PhaseLoop during the IterationCompletionCheck constructor.
@@ -448,11 +454,39 @@ public:
         return _actor->workload();
     }
 
-private:
-    bool _isNop() const;
+    ActorContext& actor() const {
+        return *_actor;
+    }
+
+    /**
+     * Convenience method for creating a metrics::Operation that's unique for this phase and thread.
+     *
+     * If "MetricsName" is specified for a phase, it is used.
+     * Otherwise "[defaultMetricsName].[phaseNumber]" is used.
+     *
+     * @param defaultMetricName the default name of the metric if "MetricsName" is not specified
+     *                          for a phase in the workload YAML.
+     * @param id the id of this Actor.
+     */
+    auto operation(const std::string& defaultMetricsName, ActorId id) const {
+        std::ostringstream stm;
+        if (auto metricsName = this->_node["MetricsName"].maybe<std::string>()) {
+            stm << *metricsName;
+        } else {
+            stm << defaultMetricsName << "." << _phaseNumber;
+        }
+
+        return this->workload()._registry->operation(
+            this->_actor->operator[]("Name").to<std::string>(), stm.str(), id);
+    }
+
+    const auto getPhaseNumber() const {
+        return _phaseNumber;
+    }
 
 private:
-    const ActorContext* _actor;
+    ActorContext* _actor;
+    const PhaseNumber _phaseNumber;
 };
 
 }  // namespace genny

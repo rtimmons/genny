@@ -29,44 +29,39 @@
 #include <gennylib/Cast.hpp>
 #include <gennylib/context.hpp>
 
-#include <value_generators/value_generators.hpp>
+#include <value_generators/DocumentGenerator.hpp>
 
 namespace genny::actor {
 
 /** @private */
 struct Insert::PhaseConfig {
     mongocxx::collection collection;
-    value_generators::UniqueExpression documentExpr;
-    ExecutionStrategy::RunOptions options;
+    DocumentGenerator documentExpr;
 
-    PhaseConfig(PhaseContext& phaseContext, const mongocxx::database& db)
-        : collection{db[phaseContext.get<std::string>("Collection")]},
-          documentExpr{value_generators::Expression::parseOperand(phaseContext.get("Document"))},
-          options{ExecutionStrategy::getOptionsFrom(phaseContext, "ExecutionsStrategy")} {}
+    PhaseConfig(PhaseContext& phaseContext, const mongocxx::database& db, ActorId id)
+        : collection{db[phaseContext["Collection"].to<std::string>()]},
+          documentExpr{phaseContext["Document"].to<DocumentGenerator>(phaseContext, id)} {}
 };
 
 void Insert::run() {
     for (auto&& config : _loop) {
         for (const auto&& _ : config) {
-            _strategy.run(
-                [&](metrics::OperationContext& ctx) {
-                    auto document = config->documentExpr->evaluate(_rng).getDocument();
-                    BOOST_LOG_TRIVIAL(info) << " Inserting " << bsoncxx::to_json(document.view());
-                    config->collection.insert_one(document.view());
-                    ctx.addOps(1);
-                    ctx.addBytes(document.view().length());
-                },
-                config->options);
+            auto ctx = _insert.start();
+            auto document = config->documentExpr();
+            BOOST_LOG_TRIVIAL(info) << " Inserting " << bsoncxx::to_json(document.view());
+            config->collection.insert_one(document.view());
+            ctx.addDocuments(1);
+            ctx.addBytes(document.view().length());
+            ctx.success();
         }
     }
 }
 
 Insert::Insert(genny::ActorContext& context)
     : Actor(context),
-      _rng{context.workload().createRNG()},
-      _strategy{context.operation("Insert", Insert::id())},
+      _insert{context.operation("Insert", Insert::id())},
       _client{std::move(context.client())},
-      _loop{context, (*_client)[context.get<std::string>("Database")]} {}
+      _loop{context, (*_client)[context["Database"].to<std::string>()], Insert::id()} {}
 
 namespace {
 auto registerInsert = genny::Cast::registerDefault<genny::actor::Insert>();

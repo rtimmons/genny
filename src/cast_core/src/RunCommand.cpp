@@ -25,18 +25,15 @@
 #include <bsoncxx/builder/stream/document.hpp>
 #include <bsoncxx/json.hpp>
 
-#include <yaml-cpp/yaml.h>
-
 #include <boost/log/trivial.hpp>
 
-#include <gennylib/ExecutionStrategy.hpp>
+#include <gennylib/InvalidConfigurationException.hpp>
 #include <gennylib/MongoException.hpp>
-#include <gennylib/v1/RateLimiter.hpp>
+#include <gennylib/Node.hpp>
 
-#include <value_generators/value_generators.hpp>
+#include <value_generators/DocumentGenerator.hpp>
 
 namespace {
-
 /**
  * @private
  * @param exception exception received from mongocxx::database::run_command()
@@ -89,15 +86,33 @@ void runThenAwaitStepdown(mongocxx::database& database, bsoncxx::document::view&
     }
 }
 
-}  // namespace
+struct RunCommandOperationConfig {
+    explicit RunCommandOperationConfig(const genny::Node& node)
+        : metricsName{node["OperationMetricsName"].maybe<std::string>().value_or("")},
+          isQuiet{node["OperationIsQuiet"].maybe<bool>().value_or(false)},
+          awaitStepdown{node["OperationAwaitStepdown"].maybe<bool>().value_or(false)} {
+        if (auto opName = node["OperationName"].maybe<std::string>();
+            opName != "RunCommand" && opName != "AdminCommand") {
+            BOOST_THROW_EXCEPTION(genny::InvalidConfigurationException(
+                "Operation name '" + *opName +
+                "' not recognized. Needs either 'RunCommand' or 'AdminCommand'."));
+        }
+    }
+    explicit RunCommandOperationConfig() {}
 
+    const std::string metricsName = "";
+    const bool isQuiet = false;
+    const bool awaitStepdown = false;
+};
+
+}  // namespace
 
 namespace genny {
 
 /** @private */
 class DatabaseOperation {
 public:
-    using OpConfig = config::RunCommandConfig::Operation;
+    using OpConfig = RunCommandOperationConfig;
 
 public:
     DatabaseOperation(PhaseContext& phaseContext,
@@ -105,50 +120,46 @@ public:
                       ActorId id,
                       const std::string& databaseName,
                       mongocxx::database database,
-                      genny::DefaultRandom& rng,
-                      value_generators::UniqueExpression commandExpr,
+                      DocumentGenerator commandExpr,
                       OpConfig opts)
         : _databaseName{databaseName},
           _database{std::move(database)},
-          _rng{rng},
           _commandExpr{std::move(commandExpr)},
           _options{std::move(opts)},
-          _rateLimiter{std::make_unique<v1::RateLimiterSimple>(_options.rateLimit)},
           _awaitStepdown{opts.awaitStepdown},
-          // Only record metrics if we have a name for the operation.
+          // Record metrics for the operation or the phase depending on
+          // whether metricsName is set for the operation.
+          //
+          // Note: actorContext.operation() must be called to use
+          // OperationMetricsName. phaseContext.operation() will try to
+          // override the name with the metrics name for the phase.
           _operation{!_options.metricsName.empty()
                          ? std::make_optional<metrics::Operation>(
                                actorContext.operation(_options.metricsName, id))
-                         : std::nullopt} {}
+                         : phaseContext.operation("DatabaseOperation", id)} {}
 
-    static std::unique_ptr<DatabaseOperation> create(YAML::Node node,
-                                                     genny::DefaultRandom& rng,
+    static std::unique_ptr<DatabaseOperation> create(const Node& node,
                                                      PhaseContext& context,
                                                      ActorContext& actorContext,
                                                      ActorId id,
                                                      mongocxx::pool::entry& client,
                                                      const std::string& database) {
-        auto yamlCommand = node["OperationCommand"];
-        auto commandExpr = value_generators::Expression::parseOperand(yamlCommand);
+        auto& yamlCommand = node["OperationCommand"];
+        auto commandExpr = yamlCommand.to<DocumentGenerator>(context, id);
 
-        auto options = node.as<DatabaseOperation::OpConfig>(DatabaseOperation::OpConfig{});
+        auto options =
+            node.maybe<DatabaseOperation::OpConfig>().value_or(DatabaseOperation::OpConfig{});
         return std::make_unique<DatabaseOperation>(context,
                                                    actorContext,
                                                    id,
                                                    database,
                                                    (*client)[database],
-                                                   rng,
                                                    std::move(commandExpr),
                                                    options);
     };
 
     void run() {
-        _rateLimiter->run([&] { _run(); });
-    }
-
-private:
-    void _run() {
-        auto command = _commandExpr->evaluate(_rng).getDocument();
+        auto command = _commandExpr();
         auto view = command.view();
 
         if (!_options.isQuiet) {
@@ -157,9 +168,8 @@ private:
         }
 
         // If we have an operation, then we have a watch
-        auto maybeWatch = _operation
-            ? std::make_optional<metrics::OperationContext>(_operation->start())
-            : std::optional<metrics::OperationContext>(std::nullopt);
+        std::optional<metrics::OperationContext> maybeWatch =
+            _operation ? std::make_optional(std::move(_operation->start())) : std::nullopt;
 
         try {
             if (_options.awaitStepdown) {
@@ -174,20 +184,19 @@ private:
                 }
             }
         } catch (mongocxx::operation_exception& e) {
-            BOOST_THROW_EXCEPTION(MongoException(e, view));
             if (maybeWatch) {
-                maybeWatch->fail();
+                maybeWatch->discard();
             }
+            BOOST_THROW_EXCEPTION(MongoException(e, view));
         }
     }
 
+private:
     std::string _databaseName;
     mongocxx::database _database;
-    genny::DefaultRandom& _rng;
-    value_generators::UniqueExpression _commandExpr;
+    DocumentGenerator _commandExpr;
     OpConfig _options;
 
-    std::unique_ptr<v1::RateLimiter> _rateLimiter;
     std::optional<metrics::Operation> _operation;
     bool _awaitStepdown;
 };
@@ -196,51 +205,51 @@ private:
 struct actor::RunCommand::PhaseConfig {
     PhaseConfig(PhaseContext& context,
                 ActorContext& actorContext,
-                genny::DefaultRandom& rng,
                 mongocxx::pool::entry& client,
                 ActorId id)
-        : strategy{actorContext.operation("RunCommand", id)},
-          options{ExecutionStrategy::getOptionsFrom(context, "ExecutionStrategy")} {
-        auto actorType = context.get<std::string>("Type");
-        auto database = context.get<std::string, false>("Database").value_or("admin");
+        : throwOnFailure{context["ThrowOnFailure"].maybe<bool>().value_or(true)} {
+        auto actorType = actorContext["Type"].to<std::string>();
+        auto database = context["Database"].maybe<std::string>().value_or("admin");
         if (actorType == "AdminCommand" && database != "admin") {
             throw InvalidConfigurationException(
                 "AdminCommands can only be run on the 'admin' database.");
         }
 
-        auto createOperation = [&](YAML::Node node) {
-            return DatabaseOperation::create(
-                node, rng, context, actorContext, id, client, database);
+        auto createOperation = [&](const Node& node) {
+            return DatabaseOperation::create(node, context, actorContext, id, client, database);
         };
 
         operations = context.getPlural<std::unique_ptr<DatabaseOperation>>(
             "Operation", "Operations", createOperation);
     }
 
-    ExecutionStrategy strategy;
-    ExecutionStrategy::RunOptions options;
+    bool throwOnFailure;
     std::vector<std::unique_ptr<DatabaseOperation>> operations;
 };
 
 void actor::RunCommand::run() {
     for (auto&& config : _loop) {
         for (auto&& _ : config) {
-            config->strategy.run(
-                [&](metrics::OperationContext& ctx) {
-                    for (auto&& op : config->operations) {
-                        op->run();
+            for (auto&& op : config->operations) {
+                try {
+                    op->run();
+                } catch (const boost::exception& ex) {
+                    if (config->throwOnFailure) {
+                        throw;
+                    } else {
+                        BOOST_LOG_TRIVIAL(debug)
+                            << "Caught error: " << boost::diagnostic_information(ex);
                     }
-                },
-                config->options);
+                }
+            }
         }
     }
 }
 
 actor::RunCommand::RunCommand(ActorContext& context)
     : Actor(context),
-      _rng{context.workload().createRNG()},
       _client{std::move(context.client())},
-      _loop{context, context, _rng, _client, RunCommand::id()} {}
+      _loop{context, context, _client, RunCommand::id()} {}
 
 namespace {
 auto registerRunCommand = Cast::registerDefault<actor::RunCommand>();

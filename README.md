@@ -1,31 +1,39 @@
-Genny 🧞‍
-========
+<img src="https://user-images.githubusercontent.com/119094/67700512-75458380-f984-11e9-9b81-668ea220b9fa.jpg" align="right" height="282" width="320">
+
+Genny
+=====
 
 Genny is a workload-generator library and tool. It is implemented using
 C++17.
 
+As of 2019-11-11, Genny is now using the Evergreen Commit-Queue. When
+you have received approval for your PR, simply comment `evergreen merge`
+and your PR will automatically be tested and merged.
+
 ## Build and Install
 
-Here're the steps to get genny up and running locally:
+Here're the steps to get Genny up and running locally:
 
-1. Install the development tools for your OS.
+1.  Install the development tools for your OS.
 
-    - Ubuntu 18.04: `sudo apt install build-essential`
-    - Red Hat/CentOS 7/Amazon Linux 2: `sudo yum groupinstall "Development Tools"`
-    - Arch: Grab a beer. Everything should already be set up.
-    - macOS: `xcode-select --install`
-    - Windows: <https://visualstudio.microsoft.com/>
+    -   Ubuntu 18.04: `sudo apt install build-essential`
+    -   Red Hat/CentOS 7/Amazon Linux 2:
+        `sudo yum groupinstall "Development Tools"`
+    -   Arch: Everything should already be set up.
+    -   macOS: `xcode-select --install`
+    -   Windows: <https://visualstudio.microsoft.com/>
 
-1.  Make sure you have a C++17 compatible compiler and Python 3.
-    The ones from mongodbtoolchain are safe bets if you're unsure.
-    (mongodbtoolchain is internal to MongoDB).
+2.  Make sure you have a C++17 compatible compiler and Python 3.7 or newer.
+    The ones from mongodbtoolchain v3 are safe bets if you're
+    unsure. (mongodbtoolchain is internal to MongoDB).
 
-1. `./scripts/lamp [--linux-distro ubuntu1804/rhel7/amazon2/arch]`
+3.  `./scripts/lamp [--linux-distro ubuntu1804/rhel7/amazon2/arch]` once
+    you have Python 3.7+ installed.
 
-    This command downloads genny's toolchain, compiles genny and
-    installs genny to `dist/`. You can rerun this command at any time
-    to rebuild genny. If your OS isn't the supported, please let us
-    know in \#workload-generation or on GitHub.
+    This command downloads Genny's toolchain, compiles Genny, and
+    installs Genny to `dist/`. You can rerun this command at any time to
+    rebuild Genny. If your OS isn't the supported, please let us know in
+    `#workload-generation` slack or on GitHub.
 
     Note that the `--linux-distro` argument is not needed on macOS.
 
@@ -33,8 +41,15 @@ Here're the steps to get genny up and running locally:
     using `make` rather than `ninja`. Building using `make` may make
     some IDEs happier.
 
+    If you get python errors from `lamp` such as this:
 
-### IDEs and Whatnot
+    > `TypeError: __init__() got an unexpected keyword argument 'capture_output'`
+
+    ensure you have a modern version of python3. On a Mac, run
+    `brew install python3` (assuming you have [homebrew
+    installed](https://brew.sh/)) and then restart your shell.
+
+## IDEs and Whatnot
 
 We follow CMake and C++17 best-practices so anything that doesn't work
 via "normal means" is probably a bug.
@@ -61,14 +76,33 @@ should look something like this:
 If you run `./scripts/lamp -b make` it should set up everything for you.
 You just need to set the "Generation Path" to your `build` directory.
 
+
+## Lint Workload YAML Files and Generate Test Reports
+
+Please refer to `src/python/README.md` for more information on how to
+lint YAML files and generating test reports.
+
+
 ## Running Genny Self-Tests
 
 Genny has self-tests using Catch2. You can run them with the following command:
 
 ```sh
-# Build genny first: `./scripts/lamp [...]`
+# Build Genny first: `./scripts/lamp [...]`
 ./scripts/lamp cmake-test
 ```
+
+For more fine-tuned testing (eg. running a single test or excluding some) you
+can manually invoke the test binaries:
+
+```sh
+# Build Genny first: `./scripts/lamp [...]`
+./build/src/gennylib/gennylib_test "My testcase"
+```
+
+Read more about what parameters you can pass [here][catch2].
+
+[catch2]: https://github.com/catchorg/Catch2/blob/v2.5.0/docs/command-line.md#specifying-which-tests-to-run
 
 ### Benchmark Tests
 
@@ -81,24 +115,20 @@ If you want to run all the tests except perf tests you can manually
 invoke the test binaries and exclude perf tests:
 
 ```sh
-# Build genny first: `./scripts/lamp [...]`
+# Build Genny first: `./scripts/lamp [...]`
 ./build/src/gennylib/gennylib_test '~[benchmark]'
 ```
 
-Read more about specifying what tests to run [here][s].
-
-[s]: https://github.com/catchorg/Catch2/blob/master/docs/command-line.md#specifying-which-tests-to-run
-
 #### Actor Integration Tests
 
-The actor tests use resmoke to set up a real MongoDB cluster and execute
+The Actor tests use resmoke to set up a real MongoDB cluster and execute
 the test binary. The resmoke yaml config files that define the different
 cluster configurations are defined in `src/resmokeconfig`.
 
 resmoke.py can be run locally as follows:
 ```sh
 # Set up virtualenv and install resmoke requirements if needed.
-# From genny's top-level directory.
+# From Genny's top-level directory.
 python /path/to/resmoke.py --suite src/resmokeconfig/genny_standalone.yml
 ```
 
@@ -106,11 +136,18 @@ Each yaml configuration file will only run tests that are associated
 with their specific tags. (Eg. `genny_standalone.yml` will only run
 tests that have been tagged with the "[standalone]" tag.)
 
-When creating a new actor, `create-new-actor.sh` will generate a new test case
-template to ensure the new actor can run against different MongoDB topologies,
-please update the template as needed so it uses the newly created actor.
+When creating a new Actor, `create-new-actor.sh` will generate a new test case
+template to ensure the new Actor can run against different MongoDB topologies,
+please update the template as needed so it uses the newly-created Actor.
 
-### Debugging
+## Patch-Testing and Evergreen
+
+When restarting any of Genny's Evergreen self-tests, make sure you
+restart *all* the tasks not just failed tasks. This is because Genny's
+tasks rely on being run in dependency-order on the same machine.
+Rescheduled tasks don't re-run dependent tasks.
+
+## Debugging
 
 IDEs can debug Genny if it is built with the `Debug` build type:
 
@@ -132,7 +169,7 @@ Then build Genny (see [above](#build-and-install) for details):
 And then run a workload:
 
 ```sh
-./build/src/driver/genny                                            \
+./build/src/driver/genny run                                        \
     --workload-file       ./src/workloads/scale/InsertRemove.yml    \
     --metrics-format      csv                                       \
     --metrics-output-file build/genny-metrics.csv                   \
@@ -166,16 +203,40 @@ should receive PRs for the YAML. The files must end with the `.yml` suffix.
 Workload YAML itself is not currently linted but please try to make the files
 look tidy.
 
+### Workload Phase Configs
+
+If your workload YAML files get too complex or if you would like to reuse parts
+of a workload in another one, you can define one or more of your phases in a
+separate YAML file.
+
+The phase configurations live in `src/phases`. There's roughly one sub-directory
+per theme, similar to how `src/workloads` is organized.
+
+For an example external phase config, please see the
+`ExternalPhaseConfig` section of the `HelloWorld.yml` workload.
+
+A couple of tips on defining external phase configs:
+
+1. Most existing workloads define their options at the `Actor` level, which is one
+level above `Phases`. Because Genny recursively traverses up the YAML to find an
+option, most of the options can be pushed down and defined at the phase level
+instead. The notable exceptions are `Name`, `Type`, and `Threads`,
+which must be defined on `Actor`.
+
+2. `genny evaluate /path/to/your/workload` is your friend. `evaluate` prints out
+the final YAML workload with all external phase definitions inlined.
+
+
 ## Patch-Testing Genny Changes with Sys-Perf / DSI
 
 Install the [evergreen command-line client](https://evergreen.mongodb.com/settings) and put it
 in your PATH.
 
 Create a patch build from the mongo repository
+
 ```sh
 cd mongo
 evergreen patch -p sys-perf
-
 ```
 
 You will see an output like this:
@@ -190,18 +251,40 @@ You will see an output like this:
 
 Copy the value of the "ID" field and a browser window to the "Build" URL.
 
-Then, set the genny module in DSI with your local genny repo.
-```
+Then, set the Genny module in DSI with your local Genny repo.
+
+```sh
 cd genny
 evergreen set-module -m dsi -i <ID> # Use the build ID from the previous step.
 ```
 
-In the browser window, select the workloads you wish to run. Good
-examples are Linux Standalone / `big_update` and Linux Standalone /
-`insert_remove`.
+In the browser window, select either `genny_patch_tasks` or `genny_auto_tasks`.
+`genny_patch_tasks` will run any workloads that you have added or modified locally
+(based on your git history). This is useful if you want to test only the workload(s)
+you've been working on. 
 
-The task will compile mongodb and will then run your workloads. Expect to
-wait around 25 minutes.
+`genny_auto_tasks` automatically runs workloads based on the evergreen environment
+(variables from `bootstrap.yml` and `runtime.yml` in DSI) and an optional AutoRun
+section in any workload, doing simple key-value matching between them. For example,
+suppose we have a `test_workload.yml` file in a `workloads/*/` subdirectory,
+containing the following AutoRun section:
+
+```yaml
+AutoRun:
+  Requires:
+    bootstrap:
+      mongodb_setup: 
+        - replica
+        - single-replica
+```
+
+In this case, `test_workload` would be run whenever `bootstrap.yml`'s `mongodb_setup`
+variable has a value of `replica` or `single-replica`. In practice, the workload
+AutoRun sections are setup so that you can use `genny_auto_tasks` to run all relevant
+workloads on a specific buildvariant.
+
+Both `genny_patch_tasks` and `genny_auto_tasks` will compile mongodb and then run
+the relevant workloads.
 
 NB: After the task runs you can call `set-module` again with more local changes.
 You can restart the workloads from the Evergreen web UI.
@@ -239,23 +322,22 @@ errors. These are not currently run in a CI job. If you are adding
 complicated code and are afraid of undefined behavior or data-races
 etc, you can run the clang sanitizers yourself easily.
 
-Running with TSAN:
+Run `./scripts/lamp --help` for information on what sanitizers there are.
 
-    FLAGS="-pthread -fsanitize=thread -g -O1"
-    ./scripts/lamp -DCMAKE_CXX_FLAGS="$FLAGS"
-    ./scripts/lamp cmake-test
-    ./build/src/driver/genny ./workloads/docs/Workload.yml
+To run with ASAN:
 
-Running with ASAN:
+```sh
+./scripts/lamp -b make -s asan
+./scripts/lamp cmake-test
+# Pick a workload YAML that uses your Actor below
+ASAN_OPTIONS="detect_container_overflow=0" ./build/src/driver/genny run ./src/workloads/docs/HelloWorld.yml
+```
 
-    FLAGS="-pthread -fsanitize=address -O1 -fno-omit-frame-pointer -g"
-    ./scripts/lamp -DCMAKE_CXX_FLAGS="$FLAGS"
-    ./scripts/lamp cmake-test
-    ./build/src/driver/genny ./workloads/docs/Workload.yml
+The toolchain isn't instrumented with sanitizers, so you may get
+[false-positives][fp] for Boost, hence the `ASAN_OPTIONS` flag.
 
-Running with UBSAN
 
-    FLAGS="-pthread -fsanitize=undefined -g -O1"
-    ./scripts/lamp -DCMAKE_CXX_FLAGS="$FLAGS"
-    ./scripts/lamp cmake-test
-    ./build/src/driver/genny ./workloads/docs/Workload.yml
+
+[fp]: https://github.com/google/sanitizers/wiki/AddressSanitizerContainerOverflow#false-positives
+
+
