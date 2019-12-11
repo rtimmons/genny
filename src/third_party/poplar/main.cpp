@@ -41,50 +41,73 @@ poplar::CreateOptions createOptions() {
     return options;
 }
 
-std::unique_ptr<poplar::PoplarEventCollector::Stub> createCollector() {
+using UPStub = std::unique_ptr<poplar::PoplarEventCollector::Stub>;
+using UPStream = std::unique_ptr<grpc::ClientWriter<poplar::EventMetrics>>;
+
+UPStub createCollectorStub() {
     auto channel = grpc::CreateChannel("localhost:2288",
                                        grpc::InsecureChannelCredentials());
     return poplar::PoplarEventCollector::NewStub(channel);
 }
 
-int main() {
-    auto collector = createCollector();
+void callCreateCollector(UPStub& stub) {
+    poplar::CreateOptions options = createOptions();
 
-    {
-        poplar::CreateOptions options = createOptions();
-
-        grpc::ClientContext context;
-        poplar::PoplarResponse response;
-        auto status = collector->CreateCollector(&context, options, &response);
-        if (!status.ok()) {
-            std::cout << "Status not okay\n" << status.error_message();
-            return EXIT_FAILURE;
-        }
+    grpc::ClientContext context;
+    poplar::PoplarResponse response;
+    auto status = stub->CreateCollector(&context, options, &response);
+    if (!status.ok()) {
+        std::cout << "Status not okay\n" << status.error_message();
+        throw std::bad_function_call();
     }
+}
 
+UPStream createStream(UPStub& stub, grpc::ClientContext& context) {
+    poplar::PoplarResponse response;
+    return stub->StreamEvents(&context, &response);
+}
 
+void writeEvent(const poplar::EventMetrics& event, UPStream& stream) {
+    auto success = stream->Write(event);
+    if (!success) {
+        std::cout << "Couldn't write: stream was closed";
+        throw std::bad_function_call();
+    }
+}
+
+void closeCollector(UPStub& stub) {
     poplar::PoplarID id;
     id.set_name(name);
 
-    {
-        poplar::EventMetrics out = createMetricsEvent();
+    grpc::ClientContext context;
+    poplar::PoplarResponse response;
+    auto status = stub->CloseCollector(&context, id, &response);
 
-        grpc::ClientContext context;
-        poplar::PoplarResponse response;
-        auto stream = collector->StreamEvents(&context, &response);
-        auto success = stream->Write(out);
-        if (!success) {
-            std::cout << "Couldn't write because " << response.DebugString();
-            return EXIT_FAILURE;
-        }
-        stream->Finish();
+    if (!status.ok()) {
+        std::cout << "Couldn't close collector: " << status.error_message();
+        throw std::bad_function_call();
     }
+}
 
-    {
-        grpc::ClientContext context;
-        poplar::PoplarResponse response;
-        collector->CloseCollector(&context, id, &response);
-    }
+
+int main() {
+    auto stub = createCollectorStub();
+    callCreateCollector(stub);
+
+    grpc::ClientContext context;
+    auto stream = createStream(stub, context);
+    std::cout << "Created stream" << std::endl;
+
+    auto event = createMetricsEvent();
+    std::cout << "Created event" << std::endl;
+
+    writeEvent(event, stream);
+    std::cout << "Wrote event" << std::endl;
+    stream->Finish();
+    std::cout << "Finished stream" << std::endl;
+
+    closeCollector(stub);
+    std::cout << "Closed collector" << std::endl;
 
     return EXIT_SUCCESS;
 }
