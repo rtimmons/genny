@@ -11,6 +11,25 @@
 constexpr auto name = "InsertRemove.Insert";
 
 
+poplar::EventMetrics createMetricsEvent() {
+    poplar::EventMetrics out;
+    out.set_name(name);
+    out.mutable_timers()->mutable_duration()->set_nanos(100);
+    out.mutable_timers()->mutable_duration()->set_seconds(30);
+
+    out.mutable_counters()->set_errors(0);
+    out.mutable_counters()->set_number(1);
+    out.mutable_counters()->set_ops(1);
+
+    out.mutable_gauges()->set_state(1);
+    out.mutable_gauges()->set_workers(1);
+    out.mutable_gauges()->set_failed(false);
+
+    out.mutable_time()->set_seconds(50000);
+    out.mutable_time()->set_nanos(30);
+    return out;
+}
+
 int main() {
     auto collector =
         poplar::PoplarEventCollector::NewStub(grpc::CreateChannel("localhost:2288", grpc::InsecureChannelCredentials()));
@@ -34,31 +53,7 @@ int main() {
     poplar::PoplarID id;
     id.set_name(name);
 
-    google::protobuf::Duration duration;
-    duration.set_seconds(32);
-    duration.set_nanos(100);
-    poplar::EventMetricsTimers timers;
-    timers.set_allocated_duration(&duration);
-
-    google::protobuf::Timestamp timestamp;
-    timestamp.set_seconds(50000);
-    timestamp.set_nanos(0);
-
-    poplar::EventMetricsCounters counters;
-    counters.set_errors(0);
-    counters.set_number(1);
-    counters.set_ops(1);
-
-    poplar::EventMetricsGauges gauges;
-    gauges.set_state(1);
-    gauges.set_workers(1);
-    gauges.set_failed(0);
-
-    poplar::EventMetrics out;
-    out.set_name(name);
-    out.set_allocated_timers(&timers);
-    out.set_allocated_time(&timestamp);
-    out.set_allocated_gauges(&gauges);
+    poplar::EventMetrics out = createMetricsEvent();
 
     grpc::ClientContext context2;
     std::cout << "Starting stream" << std::endl;
