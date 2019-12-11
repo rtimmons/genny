@@ -50,34 +50,41 @@ std::unique_ptr<poplar::PoplarEventCollector::Stub> createCollector() {
 int main() {
     auto collector = createCollector();
 
-    poplar::CreateOptions options = createOptions();
+    {
+        poplar::CreateOptions options = createOptions();
 
-    grpc::ClientContext context;
-    poplar::PoplarResponse response;
-    auto status = collector->CreateCollector(&context, options, &response);
-    if (!status.ok()) {
-        std::cout << "Status not okay\n" << status.error_message();
-        return EXIT_FAILURE;
+        grpc::ClientContext context;
+        poplar::PoplarResponse response;
+        auto status = collector->CreateCollector(&context, options, &response);
+        if (!status.ok()) {
+            std::cout << "Status not okay\n" << status.error_message();
+            return EXIT_FAILURE;
+        }
     }
+
 
     poplar::PoplarID id;
     id.set_name(name);
 
-    poplar::EventMetrics out = createMetricsEvent();
+    {
+        poplar::EventMetrics out = createMetricsEvent();
 
-    grpc::ClientContext context2;
-    std::cout << "Starting stream" << std::endl;
-    auto stream = collector->StreamEvents(&context2, &response);
-    std::cout << "Created stream" << std::endl;
-    auto success = stream->Write(out);
-    if (!success) {
-        std::cout << "Couldn't write because " << response.DebugString();
-        return EXIT_FAILURE;
+        grpc::ClientContext context;
+        poplar::PoplarResponse response;
+        auto stream = collector->StreamEvents(&context, &response);
+        auto success = stream->Write(out);
+        if (!success) {
+            std::cout << "Couldn't write because " << response.DebugString();
+            return EXIT_FAILURE;
+        }
+        stream->Finish();
     }
 
-    grpc::ClientContext context3;
-    collector->CloseCollector(&context3, id, &response);
+    {
+        grpc::ClientContext context;
+        poplar::PoplarResponse response;
+        collector->CloseCollector(&context, id, &response);
+    }
 
-    std::cout << "Closed stream" << std::endl;
     return EXIT_SUCCESS;
 }
