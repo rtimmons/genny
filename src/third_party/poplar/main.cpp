@@ -50,18 +50,6 @@ UPStub createCollectorStub() {
     return poplar::PoplarEventCollector::NewStub(channel);
 }
 
-void callCreateCollector(UPStub& stub) {
-    poplar::CreateOptions options = createOptions();
-
-    grpc::ClientContext context;
-    poplar::PoplarResponse response;
-    auto status = stub->CreateCollector(&context, options, &response);
-    if (!status.ok()) {
-        std::cout << "Status not okay\n" << status.error_message();
-        throw std::bad_function_call();
-    }
-}
-
 class EventStream {
 public:
     explicit EventStream(UPStub& stub)
@@ -87,32 +75,48 @@ private:
     UPStream _stream;
 };
 
-
-void closeCollector(UPStub& stub) {
-    poplar::PoplarID id;
-    id.set_name(name);
-
-    grpc::ClientContext context;
-    poplar::PoplarResponse response;
-    auto status = stub->CloseCollector(&context, id, &response);
-
-    if (!status.ok()) {
-        std::cout << "Couldn't close collector: " << status.error_message();
-        throw std::bad_function_call();
+class Collector {
+public:
+    explicit Collector(UPStub& stub)
+    : _stub{stub},
+     _context{},
+     _response{},
+     _id{} {
+        std::cout << "Creating collector" << std::endl;
+        _id.set_name(name);
+        poplar::CreateOptions options = createOptions();
+        auto status = _stub->CreateCollector(&_context, options, &_response);
+        if (!status.ok()) {
+            std::cout << "Status not okay\n" << status.error_message();
+            throw std::bad_function_call();
+        }
+        std::cout << "Created collector" << std::endl;
     }
-}
+
+    ~Collector() {
+        std::cout << "Closing collector" << std::endl;
+        auto status = _stub->CloseCollector(&_context, _id, &_response);
+        if (!status.ok()) {
+            std::cout << "Couldn't close collector: " << status.error_message();
+        }
+        std::cout << "Closed collector" << std::endl;
+    }
+
+private:
+    UPStub& _stub;
+    grpc::ClientContext _context;
+    poplar::PoplarResponse _response;
+    poplar::PoplarID _id;
+};
 
 
 int main() {
     auto stub = createCollectorStub();
-    callCreateCollector(stub);
-
+    auto collector = Collector(stub);
     auto stream = EventStream(stub);
+
     auto event = createMetricsEvent();
     stream.write(event);
-
-    closeCollector(stub);
-    std::cout << "Closed collector" << std::endl;
 
     return EXIT_SUCCESS;
 }
