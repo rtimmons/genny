@@ -62,18 +62,31 @@ void callCreateCollector(UPStub& stub) {
     }
 }
 
-UPStream createStream(UPStub& stub, grpc::ClientContext& context) {
-    poplar::PoplarResponse response;
-    return stub->StreamEvents(&context, &response);
-}
+class EventStream {
+public:
+    explicit EventStream(UPStub& stub)
+    : _response{},
+      _context{},
+      _stream{stub->StreamEvents(&_context, &_response)}
+      {}
 
-void writeEvent(const poplar::EventMetrics& event, UPStream& stream) {
-    auto success = stream->Write(event);
-    if (!success) {
-        std::cout << "Couldn't write: stream was closed";
-        throw std::bad_function_call();
+    void write(const poplar::EventMetrics& event) {
+        auto success = _stream->Write(event);
+        if (!success) {
+            std::cout << "Couldn't write: stream was closed";
+            throw std::bad_function_call();
+        }
     }
-}
+
+    ~EventStream() {
+        _stream->Finish();
+    }
+private:
+    poplar::PoplarResponse _response;
+    grpc::ClientContext _context;
+    UPStream _stream;
+};
+
 
 void closeCollector(UPStub& stub) {
     poplar::PoplarID id;
@@ -94,17 +107,9 @@ int main() {
     auto stub = createCollectorStub();
     callCreateCollector(stub);
 
-    grpc::ClientContext context;
-    auto stream = createStream(stub, context);
-    std::cout << "Created stream" << std::endl;
-
+    auto stream = EventStream(stub);
     auto event = createMetricsEvent();
-    std::cout << "Created event" << std::endl;
-
-    writeEvent(event, stream);
-    std::cout << "Wrote event" << std::endl;
-    stream->Finish();
-    std::cout << "Finished stream" << std::endl;
+    stream.write(event);
 
     closeCollector(stub);
     std::cout << "Closed collector" << std::endl;
