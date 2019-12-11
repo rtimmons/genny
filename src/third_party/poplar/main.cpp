@@ -30,10 +30,7 @@ poplar::EventMetrics createMetricsEvent() {
     return out;
 }
 
-int main() {
-    auto collector =
-        poplar::PoplarEventCollector::NewStub(grpc::CreateChannel("localhost:2288", grpc::InsecureChannelCredentials()));
-
+poplar::CreateOptions createOptions() {
     poplar::CreateOptions options;
     options.set_name(name);
     options.set_path("t1");
@@ -41,6 +38,19 @@ int main() {
     options.set_streaming(true);
     options.set_dynamic(false);
     options.set_recorder(poplar::CreateOptions_RecorderType_PERF);
+    return options;
+}
+
+std::unique_ptr<poplar::PoplarEventCollector::Stub> createCollector() {
+    auto channel = grpc::CreateChannel("localhost:2288",
+                                       grpc::InsecureChannelCredentials());
+    return poplar::PoplarEventCollector::NewStub(channel);
+}
+
+int main() {
+    auto collector = createCollector();
+
+    poplar::CreateOptions options = createOptions();
 
     grpc::ClientContext context;
     poplar::PoplarResponse response;
