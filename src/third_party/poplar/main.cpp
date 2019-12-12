@@ -11,10 +11,9 @@
 
 #include <poplarlib/collector.grpc.pb.h>
 
-constexpr auto name = "InsertRemove.Insert";
-
-poplar::EventMetrics createMetricsEvent() {
+poplar::EventMetrics createMetricsEvent(const std::string& name) {
     poplar::EventMetrics out;
+    // TODO: what's this versus the collector name?
     out.set_name(name);
     out.mutable_timers()->mutable_duration()->set_nanos(100);
     out.mutable_timers()->mutable_duration()->set_seconds(30);
@@ -32,16 +31,25 @@ poplar::EventMetrics createMetricsEvent() {
     return out;
 }
 
-auto randomPath() {
+auto randomSuffix(const std::string& prefix) {
     boost::random::mt19937_64 rng;
+    rng.seed(std::chrono::system_clock::now().time_since_epoch().count());
     std::stringstream out;
-    out << "run" << rng();
+    out << prefix << rng();
     return out.str();
+}
+
+auto randomPath() {
+    return randomSuffix("run");
+}
+
+auto randomName() {
+    return randomSuffix("InsertRemove.Insert");
 }
 
 poplar::CreateOptions createOptions() {
     poplar::CreateOptions options;
-    options.set_name(name);
+    options.set_name(randomName());
     options.set_path(randomPath());
     options.set_chunksize(10000);
     options.set_streaming(true);
@@ -86,15 +94,16 @@ private:
 
 class Collector {
 public:
-    explicit Collector(UPStub& stub)
+    explicit Collector(UPStub& stub, const std::string name)
     : _stub{stub},
-     _context{},
-     _response{},
      _id{} {
         std::cout << "Creating collector" << std::endl;
         _id.set_name(name);
+
+        grpc::ClientContext context;
+        poplar::PoplarResponse response;
         poplar::CreateOptions options = createOptions();
-        auto status = _stub->CreateCollector(&_context, options, &_response);
+        auto status = _stub->CreateCollector(&context, options, &response);
         if (!status.ok()) {
             std::cout << "Status not okay\n" << status.error_message();
             throw std::bad_function_call();
@@ -104,7 +113,9 @@ public:
 
     ~Collector() {
         std::cout << "Closing collector" << std::endl;
-        auto status = _stub->CloseCollector(&_context, _id, &_response);
+        grpc::ClientContext context;
+        poplar::PoplarResponse response;
+        auto status = _stub->CloseCollector(&context, _id, &response);
         if (!status.ok()) {
             std::cout << "Couldn't close collector: " << status.error_message();
         }
@@ -113,8 +124,6 @@ public:
 
 private:
     UPStub& _stub;
-    grpc::ClientContext _context;
-    poplar::PoplarResponse _response;
     poplar::PoplarID _id;
 };
 
@@ -122,11 +131,16 @@ private:
 int main() {
     GOOGLE_PROTOBUF_VERIFY_VERSION;
 
+    // disable output buffering
+    std::cout.rdbuf()->pubsetbuf(nullptr, 0);
+
+    const std::string name = randomName();
+
     auto stub = createCollectorStub();
-    auto collector = Collector(stub);
+    auto collector = Collector(stub, name);
     auto stream = EventStream(stub);
 
-    auto event = createMetricsEvent();
+    auto event = createMetricsEvent(name);
     stream.write(event);
 
     return EXIT_SUCCESS;
