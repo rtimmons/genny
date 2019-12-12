@@ -1,6 +1,9 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <sstream>
+
+#include <boost/random/mersenne_twister.hpp>
 
 #include <grpcpp/client_context.h>
 #include <grpcpp/create_channel.h>
@@ -9,7 +12,6 @@
 #include <poplarlib/collector.grpc.pb.h>
 
 constexpr auto name = "InsertRemove.Insert";
-
 
 poplar::EventMetrics createMetricsEvent() {
     poplar::EventMetrics out;
@@ -30,10 +32,17 @@ poplar::EventMetrics createMetricsEvent() {
     return out;
 }
 
+auto randomPath() {
+    boost::random::mt19937_64 rng;
+    std::stringstream out;
+    out << "run" << rng();
+    return out.str();
+}
+
 poplar::CreateOptions createOptions() {
     poplar::CreateOptions options;
     options.set_name(name);
-    options.set_path("t1");
+    options.set_path(randomPath());
     options.set_chunksize(10000);
     options.set_streaming(true);
     options.set_dynamic(false);
@@ -111,6 +120,8 @@ private:
 
 
 int main() {
+    GOOGLE_PROTOBUF_VERIFY_VERSION;
+
     auto stub = createCollectorStub();
     auto collector = Collector(stub);
     auto stream = EventStream(stub);
