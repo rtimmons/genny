@@ -19,7 +19,8 @@ poplar::EventMetrics createMetricsEvent(const std::string& name) {
     out.mutable_timers()->mutable_duration()->set_seconds(30);
 
     out.mutable_counters()->set_errors(0);
-    // increment number every time the Actor sends an event - it's incremented once per iteration of the test
+    // increment number every time the Actor sends an event - it's incremented once per iteration of
+    // the test
     out.mutable_counters()->set_number(1);
     // ops is number of things done in that iteration
     out.mutable_counters()->set_ops(1);
@@ -60,7 +61,8 @@ poplar::CreateOptions createOptions(const std::string& name) {
     // end in .ftdc -- each stream should have a different path -- unique id for the stream
     options.set_path(randomPath());
     // how many events between compression and write events
-    options.set_chunksize(10000); // probably not less than 10k maybe more - play with it; less means more time in cpu&io to compress
+    options.set_chunksize(10000);  // probably not less than 10k maybe more - play with it; less
+                                   // means more time in cpu&io to compress
     // flush to disk intermittently
     options.set_streaming(true);
     // dynamic means shape changes over time
@@ -74,21 +76,19 @@ using UPStub = std::unique_ptr<poplar::PoplarEventCollector::Stub>;
 using UPStream = std::unique_ptr<grpc::ClientWriter<poplar::EventMetrics>>;
 
 UPStub createCollectorStub() {
-    auto channel = grpc::CreateChannel("localhost:2288",
-                                       grpc::InsecureChannelCredentials());
+    auto channel = grpc::CreateChannel("localhost:2288", grpc::InsecureChannelCredentials());
     return poplar::PoplarEventCollector::NewStub(channel);
 }
 
 class EventStream {
 public:
     explicit EventStream(UPStub& stub)
-    : _response{},
-      _context{},
-      // multiple streams can write to the same collector name
-      _stream{stub->StreamEvents(&_context, &_response)}
-      {
-          std::cout << "Created stream. response:\n" << _response.DebugString() << std::endl;
-      }
+        : _response{},
+          _context{},
+          // multiple streams can write to the same collector name
+          _stream{stub->StreamEvents(&_context, &_response)} {
+        std::cout << "Created stream. response:\n" << _response.DebugString() << std::endl;
+    }
 
     void write(const poplar::EventMetrics& event) {
         auto success = _stream->Write(event);
@@ -104,11 +104,13 @@ public:
         }
         auto status = _stream->Finish();
         if (!status.ok()) {
-            std::cout << "Problem closing the stream:\n" << _context.debug_error_string() << std::endl;
+            std::cout << "Problem closing the stream:\n"
+                      << _context.debug_error_string() << std::endl;
         } else {
             std::cout << "Closed stream" << std::endl;
         }
     }
+
 private:
     poplar::PoplarResponse _response;
     grpc::ClientContext _context;
@@ -117,9 +119,7 @@ private:
 
 class Collector {
 public:
-    explicit Collector(UPStub& stub, const std::string& name)
-    : _stub{stub},
-     _id{} {
+    explicit Collector(UPStub& stub, const std::string& name) : _stub{stub}, _id{} {
         _id.set_name(name);
 
         grpc::ClientContext context;
@@ -166,12 +166,14 @@ int main() {
     auto collector = Collector(stub, name);
     auto stream = EventStream(stub);
 
-    for(unsigned int i=1; i <= 10000; ++i ) {
-        // TODO: if we're running out of air, only 'need' to send the name in the first event sent on the stream
+    for (unsigned int i = 1; i <= 10000; ++i) {
+        // TODO: if we're running out of air, only 'need' to send the name in the first event sent
+        // on the stream
         auto event = createMetricsEvent(name);
         stream.write(event);
         if (i % 5000 == 0) {
-            std::cout << "Wrote " << i << " events. Latest is \n" << event.DebugString() << std::endl;
+            std::cout << "Wrote " << i << " events. Latest is \n"
+                      << event.DebugString() << std::endl;
         }
     }
 
