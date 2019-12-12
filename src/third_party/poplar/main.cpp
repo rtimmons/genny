@@ -99,6 +99,9 @@ public:
     }
 
     ~EventStream() {
+        if (!_stream) {
+            return;
+        }
         auto status = _stream->Finish();
         if (!status.ok()) {
             std::cout << "Problem closing the stream:\n" << _context.debug_error_string() << std::endl;
@@ -131,6 +134,9 @@ public:
     }
 
     ~Collector() {
+        if (!_stub) {
+            return;
+        }
         grpc::ClientContext context;
         poplar::PoplarResponse response;
         // causes flush to disk etc
