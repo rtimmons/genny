@@ -47,9 +47,9 @@ auto randomName() {
     return randomSuffix("InsertRemove.Insert");
 }
 
-poplar::CreateOptions createOptions() {
+poplar::CreateOptions createOptions(const std::string& name) {
     poplar::CreateOptions options;
-    options.set_name(randomName());
+    options.set_name(name);
     options.set_path(randomPath());
     options.set_chunksize(10000);
     options.set_streaming(true);
@@ -73,7 +73,9 @@ public:
     : _response{},
       _context{},
       _stream{stub->StreamEvents(&_context, &_response)}
-      {}
+      {
+          std::cout << "Created stream. response:\n" << _response.DebugString() << std::endl;
+      }
 
     void write(const poplar::EventMetrics& event) {
         auto success = _stream->Write(event);
@@ -84,7 +86,12 @@ public:
     }
 
     ~EventStream() {
-        _stream->Finish();
+        auto status = _stream->Finish();
+        if (!status.ok()) {
+            std::cout << "Problem closing the stream:\n" << _context.debug_error_string() << std::endl;
+        } else {
+            std::cout << "Closed stream" << std::endl;
+        }
     }
 private:
     poplar::PoplarResponse _response;
@@ -94,32 +101,30 @@ private:
 
 class Collector {
 public:
-    explicit Collector(UPStub& stub, const std::string name)
+    explicit Collector(UPStub& stub, const std::string& name)
     : _stub{stub},
      _id{} {
-        std::cout << "Creating collector" << std::endl;
         _id.set_name(name);
 
         grpc::ClientContext context;
         poplar::PoplarResponse response;
-        poplar::CreateOptions options = createOptions();
+        poplar::CreateOptions options = createOptions(name);
         auto status = _stub->CreateCollector(&context, options, &response);
         if (!status.ok()) {
             std::cout << "Status not okay\n" << status.error_message();
             throw std::bad_function_call();
         }
-        std::cout << "Created collector" << std::endl;
+        std::cout << "Created collector with options\n" << options.DebugString() << std::endl;
     }
 
     ~Collector() {
-        std::cout << "Closing collector" << std::endl;
         grpc::ClientContext context;
         poplar::PoplarResponse response;
         auto status = _stub->CloseCollector(&context, _id, &response);
         if (!status.ok()) {
             std::cout << "Couldn't close collector: " << status.error_message();
         }
-        std::cout << "Closed collector" << std::endl;
+        std::cout << "Closed collector with id \n" << _id.DebugString() << std::endl;
     }
 
 private:
@@ -140,8 +145,13 @@ int main() {
     auto collector = Collector(stub, name);
     auto stream = EventStream(stub);
 
-    auto event = createMetricsEvent(name);
-    stream.write(event);
+    for(unsigned int i=0; i < 10; ++i ) {
+        auto event = createMetricsEvent(name);
+        stream.write(event);
+        if (i % 5 == 0) {
+            std::cout << "Wrote " << i << " events. Latest is \n" << event.DebugString() << std::endl;
+        }
+    }
 
     return EXIT_SUCCESS;
 }
