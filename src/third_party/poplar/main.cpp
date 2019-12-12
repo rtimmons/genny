@@ -145,10 +145,10 @@ int main() {
     auto collector = Collector(stub, name);
     auto stream = EventStream(stub);
 
-    for(unsigned int i=0; i < 10; ++i ) {
+    for(unsigned int i=1; i <= 10000; ++i ) {
         auto event = createMetricsEvent(name);
         stream.write(event);
-        if (i % 5 == 0) {
+        if (i % 5000 == 0) {
             std::cout << "Wrote " << i << " events. Latest is \n" << event.DebugString() << std::endl;
         }
     }
