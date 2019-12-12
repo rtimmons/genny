@@ -19,10 +19,16 @@ poplar::EventMetrics createMetricsEvent(const std::string& name) {
     out.mutable_timers()->mutable_duration()->set_seconds(30);
 
     out.mutable_counters()->set_errors(0);
+    // increment number every time the Actor sends an event - it's incremented once per iteration of the test
     out.mutable_counters()->set_number(1);
+    // ops is number of things done in that iteration
     out.mutable_counters()->set_ops(1);
+    // bytes
+    out.mutable_counters()->set_size(32893043);
 
+    // phase of test
     out.mutable_gauges()->set_state(1);
+    // threads
     out.mutable_gauges()->set_workers(1);
     out.mutable_gauges()->set_failed(false);
 
@@ -50,10 +56,16 @@ auto randomName() {
 poplar::CreateOptions createOptions(const std::string& name) {
     poplar::CreateOptions options;
     options.set_name(name);
+    options.set_events(poplar::CreateOptions_EventsCollectorType_BASIC);
+    // end in .ftdc -- each stream should have a different path -- unique id for the stream
     options.set_path(randomPath());
-    options.set_chunksize(10000);
+    // how many events between compression and write events
+    options.set_chunksize(10000); // probably not less than 10k maybe more - play with it; less means more time in cpu&io to compress
+    // flush to disk intermittently
     options.set_streaming(true);
+    // dynamic means shape changes over time
     options.set_dynamic(false);
+    // may not matter but shrug it works
     options.set_recorder(poplar::CreateOptions_RecorderType_PERF);
     return options;
 }
@@ -72,6 +84,7 @@ public:
     explicit EventStream(UPStub& stub)
     : _response{},
       _context{},
+      // multiple streams can write to the same collector name
       _stream{stub->StreamEvents(&_context, &_response)}
       {
           std::cout << "Created stream. response:\n" << _response.DebugString() << std::endl;
@@ -120,6 +133,7 @@ public:
     ~Collector() {
         grpc::ClientContext context;
         poplar::PoplarResponse response;
+        // causes flush to disk etc
         auto status = _stub->CloseCollector(&context, _id, &response);
         if (!status.ok()) {
             std::cout << "Couldn't close collector: " << status.error_message();
@@ -129,6 +143,7 @@ public:
 
 private:
     UPStub& _stub;
+    // _id should always be the same as the name in the options to createcollector
     poplar::PoplarID _id;
 };
 
@@ -146,6 +161,7 @@ int main() {
     auto stream = EventStream(stub);
 
     for(unsigned int i=1; i <= 10000; ++i ) {
+        // TODO: if we're running out of air, only 'need' to send the name in the first event sent on the stream
         auto event = createMetricsEvent(name);
         stream.write(event);
         if (i % 5000 == 0) {
