@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
+#include <unordered_map>
 
 #include <boost/random/mersenne_twister.hpp>
 
@@ -13,7 +14,7 @@
 
 poplar::EventMetrics createMetricsEvent(const std::string& name) {
     poplar::EventMetrics out;
-    // TODO: what's this versus the collector name?
+    // only need to send this the first time
     out.set_name(name);
     out.mutable_timers()->mutable_duration()->set_nanos(100);
     out.mutable_timers()->mutable_duration()->set_seconds(30);
@@ -33,6 +34,7 @@ poplar::EventMetrics createMetricsEvent(const std::string& name) {
     out.mutable_gauges()->set_workers(1);
     out.mutable_gauges()->set_failed(false);
 
+    // TODO: what's the difference between time and timers?
     out.mutable_time()->set_seconds(50000);
     out.mutable_time()->set_nanos(30);
     return out;
@@ -153,6 +155,55 @@ private:
     poplar::PoplarID _id;
 };
 
+class OperationImpl {
+public:
+    OperationImpl(std::string actorName,
+                  std::string opName,
+                  UPStub& stub)
+    :_stream{stub} {}
+private:
+    EventStream _stream;
+};
+
+class Operation {
+public:
+    explicit Operation(OperationImpl& impl)
+    : _impl{std::addressof(impl)} {}
+private:
+    OperationImpl* _impl;
+};
+
+class Registry {
+private:
+    // Thread -> EventStream
+    using OperationsByThread = std::unordered_map<int/*ActorId*/, OperationImpl>;
+    // OperationName -> all threads for that OperationName
+    using OperationsByType = std::unordered_map<std::string, OperationsByThread>;
+    // OperationsMap is a map of
+    // actor name -> operation name -> actor id -> OperationImpl (time series).
+    using OperationsMap = std::unordered_map<std::string, OperationsByType>;
+public:
+    Operation operation(std::string actorName,
+                         std::string opName,
+                         int actorId) {
+        auto& opsByType = this->_ops[actorName];
+        auto& opsByThread = opsByType[opName];
+        // opIt is pair<actorid,operationImpl>
+        auto opIt =
+                opsByThread
+                        .try_emplace(actorId,
+                                     std::move(actorName),
+                                     std::move(opName),
+                                     _stub)
+                        .first;
+        return Operation{opIt->second};
+    }
+
+private:
+    UPStub _stub;
+    Collector _collector;
+    OperationsMap _ops;
+};
 
 int main() {
     GOOGLE_PROTOBUF_VERIFY_VERSION;
