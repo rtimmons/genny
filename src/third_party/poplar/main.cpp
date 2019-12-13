@@ -101,10 +101,18 @@ public:
     }
 
     ~EventStream() {
+        std::cout << "Closing EventStream." << std::endl;
         if (!_stream) {
+            std::cout << "No _stream." << std::endl;
             return;
         }
+        std::cout << "Calling Finish." << std::endl;
+        if (!_stream->WritesDone()) {
+            // TODO: barf
+            std::cout << "Errors in doing the writes?" << std::endl;
+        }
         auto status = _stream->Finish();
+        std::cout << "Called Finish." << std::endl;
         if (!status.ok()) {
             std::cout << "Problem closing the stream:\n"
                       << _context.debug_error_string() << std::endl;
@@ -136,6 +144,7 @@ public:
     }
 
     ~Collector() {
+        std::cout << "Closing collector." << std::endl;
         if (!_stub) {
             return;
         }
@@ -156,12 +165,22 @@ private:
 };
 
 class OperationImpl {
+    static std::string makeName(const std::string& actorName,
+                                const std::string& opName) {
+        std::stringstream str;
+        str << actorName << "." << opName;
+        return str.str();
+    }
 public:
-    OperationImpl(std::string actorName,
-                  std::string opName,
+    OperationImpl(const std::string& actorName,
+                  const std::string& opName,
                   UPStub& stub)
-    :_stream{stub} {}
+    : _name{makeName(actorName, opName)},
+      _collector{stub, _name},
+      _stream{stub} {}
 private:
+    std::string _name;
+    Collector _collector;
     EventStream _stream;
 };
 
@@ -183,6 +202,9 @@ private:
     // actor name -> operation name -> actor id -> OperationImpl (time series).
     using OperationsMap = std::unordered_map<std::string, OperationsByType>;
 public:
+    explicit Registry(UPStub stub)
+    : _stub{std::move(stub)}, _ops{} {}
+
     Operation operation(std::string actorName,
                          std::string opName,
                          int actorId) {
@@ -196,12 +218,12 @@ public:
                                      std::move(opName),
                                      _stub)
                         .first;
+        std::cout << "Created OperationImpl" << std::endl;
         return Operation{opIt->second};
     }
 
 private:
     UPStub _stub;
-    Collector _collector;
     OperationsMap _ops;
 };
 
@@ -213,6 +235,9 @@ int main() {
 
     const std::string name = randomName();
 
+//    Registry reg{createCollectorStub()};
+//    auto op = reg.operation("Insert", "InsertRemove", 1);
+//    std::cout << "Created op." << std::endl;
     auto stub = createCollectorStub();
     auto collector = Collector(stub, name);
     auto stream = EventStream(stub);
@@ -227,6 +252,6 @@ int main() {
                       << event.DebugString() << std::endl;
         }
     }
-
+    std::cout << "Done." << std::endl;
     return EXIT_SUCCESS;
 }
