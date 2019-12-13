@@ -165,6 +165,10 @@ private:
 };
 
 class OperationImpl {
+    enum class State {
+        kOpen,
+        kClosed,
+    };
     static std::string makeName(const std::string& actorName,
                                 const std::string& opName) {
         std::stringstream str;
@@ -175,19 +179,62 @@ public:
     OperationImpl(const std::string& actorName,
                   const std::string& opName,
                   UPStub& stub)
-    : _name{makeName(actorName, opName)},
+    : _state{State::kClosed},
+      _name{makeName(actorName, opName)},
+      _storage{},
       _collector{stub, _name},
-      _stream{stub} {}
+      _stream{stub} {
+        _storage.set_name(_name);
+    }
+
+    void success() {
+        this->report();
+    }
+
+    void addBytes(int bytes) {
+        _storage.mutable_counters()->set_size(
+                _storage.mutable_counters()->size() + bytes);
+        std::cout << "Added bytes to \n" << _storage.DebugString() << std::endl;
+    }
+
+    void report() {
+        _stream.write(_storage);
+        std::cout << "Wrote \n" << _storage.DebugString() << std::endl;
+    }
 private:
+    State _state;
     std::string _name;
+    poplar::EventMetrics _storage;
     Collector _collector;
     EventStream _stream;
+};
+
+class OperationContext {
+public:
+    explicit OperationContext(OperationImpl& impl)
+    : _impl{std::addressof(impl)} {}
+
+    void success() {
+        _impl->success();
+    }
+
+    void addBytes(int bytes) {
+        _impl->addBytes(bytes);
+    }
+
+private:
+    OperationImpl* _impl;
 };
 
 class Operation {
 public:
     explicit Operation(OperationImpl& impl)
     : _impl{std::addressof(impl)} {}
+
+    OperationContext start() {
+        return OperationContext{*_impl};
+    }
+
 private:
     OperationImpl* _impl;
 };
@@ -235,23 +282,28 @@ int main() {
 
     const std::string name = randomName();
 
-//    Registry reg{createCollectorStub()};
-//    auto op = reg.operation("Insert", "InsertRemove", 1);
-//    std::cout << "Created op." << std::endl;
-    auto stub = createCollectorStub();
-    auto collector = Collector(stub, name);
-    auto stream = EventStream(stub);
+    Registry reg{createCollectorStub()};
+    auto op = reg.operation("Insert", "InsertRemove", 1);
+    std::cout << "Created op." << std::endl;
 
-    for (unsigned int i = 1; i <= 10000; ++i) {
-        // TODO: if we're running out of air, only 'need' to send the name in the first event sent
-        // on the stream
-        auto event = createMetricsEvent(name);
-        stream.write(event);
-        if (i % 5000 == 0) {
-            std::cout << "Wrote " << i << " events. Latest is \n"
-                      << event.DebugString() << std::endl;
-        }
-    }
+    auto ctx = op.start();
+    ctx.addBytes(1234);
+    ctx.success();
+
+//    auto stub = createCollectorStub();
+//    auto collector = Collector(stub, name);
+//    auto stream = EventStream(stub);
+//
+//    for (unsigned int i = 1; i <= 10000; ++i) {
+//        // TODO: if we're running out of air, only 'need' to send the name in the first event sent
+//        // on the stream
+//        auto event = createMetricsEvent(name);
+//        stream.write(event);
+//        if (i % 5000 == 0) {
+//            std::cout << "Wrote " << i << " events. Latest is \n"
+//                      << event.DebugString() << std::endl;
+//        }
+//    }
     std::cout << "Done." << std::endl;
     return EXIT_SUCCESS;
 }
