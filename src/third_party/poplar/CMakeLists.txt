@@ -24,6 +24,8 @@ add_library(poplarlib STATIC
     poplarlib/recorder.grpc.pb.h
     poplarlib/recorder.pb.cc
     poplarlib/recorder.pb.h
+
+    poplarlib/SimpleMetrics.hpp
 )
 
 target_link_libraries(poplarlib
