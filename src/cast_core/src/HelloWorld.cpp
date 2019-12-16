@@ -50,9 +50,9 @@ void HelloWorld::run() {
     for (auto&& config : _loop) {
         for (auto _ : config) {
             auto ctx = config->operation.start();
-            BOOST_LOG_TRIVIAL(info) << config->message;
-            ++_helloCounter;
-            BOOST_LOG_TRIVIAL(info) << "Counter: " << _helloCounter;
+//            BOOST_LOG_TRIVIAL(info) << config->message;
+//            ++_helloCounter;
+//            BOOST_LOG_TRIVIAL(info) << "Counter: " << _helloCounter;
             ctx.addDocuments(1);
             ctx.addBytes(config->message.size());
             ctx.success();
