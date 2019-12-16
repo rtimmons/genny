@@ -55,6 +55,8 @@ public:
     void run() override;
 
 private:
+    struct Other;
+    std::unique_ptr<Other> _other;
     /**
      * constructed from each `Phase:` block in the `Actor:` block
      * @private

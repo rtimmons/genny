@@ -20,21 +20,29 @@
 
 #include <gennylib/Cast.hpp>
 
+#include <poplarlib/SimpleMetrics.hpp>
+
 namespace genny::actor {
+
+struct HelloWorld::Other {
+    simplemetrics::Registry registry;
+    explicit Other()
+    : registry{simplemetrics::createCollectorStub()} {}
+};
 
 /** @private */
 struct HelloWorld::PhaseConfig {
     std::string message;
 
     /** record data about each iteration */
-    metrics::Operation operation;
+    simplemetrics::Operation operation;
 
-    metrics::Operation syntheticOperation;
+    simplemetrics::Operation syntheticOperation;
 
-    explicit PhaseConfig(PhaseContext& context, ActorId actorId)
+    explicit PhaseConfig(PhaseContext& context, ActorId actorId, std::unique_ptr<HelloWorld::Other>& other)
         : message{context["Message"].maybe<std::string>().value_or("Hello, World!")},
-          operation{context.operation("DefaultMetricsName", actorId)},
-          syntheticOperation{context.operation("SyntheticOperation", actorId)} {}
+          operation{other->registry.operation("HelloWorld", "DefaultMetricsName", actorId)},
+          syntheticOperation{other->registry.operation("HelloWorld", "SyntheticOperation", actorId)} {}
 };
 
 void HelloWorld::run() {
@@ -48,16 +56,17 @@ void HelloWorld::run() {
             ctx.addBytes(config->message.size());
             ctx.success();
 
-            config->syntheticOperation.report(metrics::clock::now(),
-                                              std::chrono::milliseconds{_helloCounter});
+//            config->syntheticOperation.report(metrics::clock::now(),
+//                                              std::chrono::milliseconds{_helloCounter});
         }
     }
 }
 
 HelloWorld::HelloWorld(genny::ActorContext& context)
     : Actor(context),
+      _other{std::make_unique<Other>()},
       _helloCounter{WorkloadContext::getActorSharedState<HelloWorld, HelloWorldCounter>()},
-      _loop{context, HelloWorld::id()} {}
+      _loop{context, HelloWorld::id(), _other} {}
 
 namespace {
 auto registerHelloWorld = genny::Cast::registerDefault<genny::actor::HelloWorld>();

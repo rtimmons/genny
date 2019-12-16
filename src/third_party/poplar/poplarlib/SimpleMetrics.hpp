@@ -194,6 +194,10 @@ public:
         reset(_storage);
     }
 
+    void addDocuments(int docs) {
+        _storage.mutable_counters()->set_number(_storage.mutable_counters()->number() + docs);
+    }
+
     void addBytes(int bytes) {
         _storage.mutable_counters()->set_size(_storage.mutable_counters()->size() + bytes);
     }
@@ -220,6 +224,10 @@ public:
 
     void addBytes(int bytes) {
         _impl->addBytes(bytes);
+    }
+
+    void addDocuments(int docs) {
+        _impl->addDocuments(docs);
     }
 
 private:
