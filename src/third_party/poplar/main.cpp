@@ -142,8 +142,7 @@ class OperationImpl {
         kOpen,
         kClosed,
     };
-    static std::string makeName(const std::string& actorName,
-                                const std::string& opName) {
+    static std::string makeName(const std::string& actorName, const std::string& opName) {
         std::stringstream str;
         str << actorName << "." << opName;
         return str.str();
@@ -162,8 +161,8 @@ class OperationImpl {
         out.mutable_timers()->mutable_duration()->set_seconds(0);
 
         out.mutable_counters()->set_errors(0);
-        // increment number every time the Actor sends an event - it's incremented once per iteration of
-        // the test
+        // increment number every time the Actor sends an event - it's incremented once per
+        // iteration of the test
         out.mutable_counters()->set_number(0);
         // ops is number of things done in that iteration
         out.mutable_counters()->set_ops(0);
@@ -180,15 +179,14 @@ class OperationImpl {
         out.mutable_time()->set_seconds(0);
         out.mutable_time()->set_nanos(0);
     }
+
 public:
-    OperationImpl(const std::string& actorName,
-                  const std::string& opName,
-                  UPStub& stub)
-    : _state{State::kClosed},
-      _name{makeName(actorName, opName)},
-      _collector{stub, _name},
-      _stream{stub},
-      _storage{createMetricsEvent(_name)} {}
+    OperationImpl(const std::string& actorName, const std::string& opName, UPStub& stub)
+        : _state{State::kClosed},
+          _name{makeName(actorName, opName)},
+          _collector{stub, _name},
+          _stream{stub},
+          _storage{createMetricsEvent(_name)} {}
 
     void success() {
         this->report();
@@ -196,13 +194,13 @@ public:
     }
 
     void addBytes(int bytes) {
-        _storage.mutable_counters()->set_size(
-                _storage.mutable_counters()->size() + bytes);
+        _storage.mutable_counters()->set_size(_storage.mutable_counters()->size() + bytes);
     }
 
     void report() {
         _stream.write(_storage);
     }
+
 private:
     State _state;
     std::string _name;
@@ -213,8 +211,7 @@ private:
 
 class OperationContext {
 public:
-    explicit OperationContext(OperationImpl& impl)
-    : _impl{std::addressof(impl)} {}
+    explicit OperationContext(OperationImpl& impl) : _impl{std::addressof(impl)} {}
 
     void success() {
         _impl->success();
@@ -230,8 +227,7 @@ private:
 
 class Operation {
 public:
-    explicit Operation(OperationImpl& impl)
-    : _impl{std::addressof(impl)} {}
+    explicit Operation(OperationImpl& impl) : _impl{std::addressof(impl)} {}
 
     OperationContext start() {
         return OperationContext{*_impl};
@@ -244,29 +240,21 @@ private:
 class Registry {
 private:
     // Thread -> EventStream
-    using OperationsByThread = std::unordered_map<int/*ActorId*/, OperationImpl>;
+    using OperationsByThread = std::unordered_map<int /*ActorId*/, OperationImpl>;
     // OperationName -> all threads for that OperationName
     using OperationsByType = std::unordered_map<std::string, OperationsByThread>;
     // OperationsMap is a map of
     // actor name -> operation name -> actor id -> OperationImpl (time series).
     using OperationsMap = std::unordered_map<std::string, OperationsByType>;
-public:
-    explicit Registry(UPStub stub)
-    : _stub{std::move(stub)}, _ops{} {}
 
-    Operation operation(const std::string& actorName,
-                         const std::string& opName,
-                         int actorId) {
+public:
+    explicit Registry(UPStub stub) : _stub{std::move(stub)}, _ops{} {}
+
+    Operation operation(const std::string& actorName, const std::string& opName, int actorId) {
         auto& opsByType = this->_ops[actorName];
         auto& opsByThread = opsByType[opName];
         // opIt is pair<actorid,operationImpl>
-        auto opIt =
-                opsByThread
-                        .try_emplace(actorId,
-                                     actorName,
-                                     opName,
-                                     _stub)
-                        .first;
+        auto opIt = opsByThread.try_emplace(actorId, actorName, opName, _stub).first;
         return Operation{opIt->second};
     }
 
@@ -285,27 +273,28 @@ int main() {
     auto op = reg.operation("Insert", "InsertRemove", 1);
     std::cout << "Created op." << std::endl;
 
-    for(int i=0; i < 10000; ++i) {
+    for (int i = 0; i < 10000; ++i) {
         auto ctx = op.start();
         ctx.addBytes(1234 + i);
         ctx.success();
     }
 
 
-//    auto stub = createCollectorStub();
-//    auto collector = Collector(stub, name);
-//    auto stream = EventStream(stub);
-//
-//    for (unsigned int i = 1; i <= 10000; ++i) {
-//        // TODO: if we're running out of air, only 'need' to send the name in the first event sent
-//        // on the stream
-//        auto event = createMetricsEvent(name);
-//        stream.write(event);
-//        if (i % 5000 == 0) {
-//            std::cout << "Wrote " << i << " events. Latest is \n"
-//                      << event.DebugString() << std::endl;
-//        }
-//    }
+    //    auto stub = createCollectorStub();
+    //    auto collector = Collector(stub, name);
+    //    auto stream = EventStream(stub);
+    //
+    //    for (unsigned int i = 1; i <= 10000; ++i) {
+    //        // TODO: if we're running out of air, only 'need' to send the name in the first event
+    //        sent
+    //        // on the stream
+    //        auto event = createMetricsEvent(name);
+    //        stream.write(event);
+    //        if (i % 5000 == 0) {
+    //            std::cout << "Wrote " << i << " events. Latest is \n"
+    //                      << event.DebugString() << std::endl;
+    //        }
+    //    }
     std::cout << "Done." << std::endl;
     return EXIT_SUCCESS;
 }
