@@ -37,12 +37,13 @@ struct HelloWorld::PhaseConfig {
     /** record data about each iteration */
     simplemetrics::Operation operation;
 
-    simplemetrics::Operation syntheticOperation;
+//    simplemetrics::Operation syntheticOperation;
 
     explicit PhaseConfig(PhaseContext& context, ActorId actorId, std::unique_ptr<HelloWorld::Other>& other)
         : message{context["Message"].maybe<std::string>().value_or("Hello, World!")},
-          operation{other->registry.operation("HelloWorld", "DefaultMetricsName", actorId)},
-          syntheticOperation{other->registry.operation("HelloWorld", "SyntheticOperation", actorId)} {}
+          operation{other->registry.operation("HelloWorld", "Write", actorId)}
+          // syntheticOperation{other->registry.operation("HelloWorld", "SyntheticOperation", actorId)}
+          {}
 };
 
 void HelloWorld::run() {

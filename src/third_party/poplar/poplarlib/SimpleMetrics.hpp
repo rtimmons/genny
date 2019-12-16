@@ -143,9 +143,9 @@ class OperationImpl {
         kOpen,
         kClosed,
     };
-    static std::string makeName(const std::string& actorName, const std::string& opName) {
+    static std::string makeName(const std::string& actorName, const std::string& opName, int actorId) {
         std::stringstream str;
-        str << actorName << "." << opName;
+        str << actorName << "." << opName << "." << actorId;
         return str.str();
     }
 
@@ -182,9 +182,9 @@ class OperationImpl {
     }
 
 public:
-    OperationImpl(const std::string& actorName, const std::string& opName, UPStub& stub)
+    OperationImpl(const std::string& actorName, const std::string& opName, int actorId, UPStub& stub)
             : _state{State::kClosed},
-              _name{makeName(actorName, opName)},
+              _name{makeName(actorName, opName, actorId)},
               _collector{stub, _name},
               _stream{stub},
               _storage{createMetricsEvent(_name)} {}
@@ -263,7 +263,7 @@ public:
         auto& opsByType = this->_ops[actorName];
         auto& opsByThread = opsByType[opName];
         // opIt is pair<actorid,operationImpl>
-        auto opIt = opsByThread.try_emplace(actorId, actorName, opName, _stub).first;
+        auto opIt = opsByThread.try_emplace(actorId, actorName, opName, actorId, _stub).first;
         return Operation{opIt->second};
     }
 
