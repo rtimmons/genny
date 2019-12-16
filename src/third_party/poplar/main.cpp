@@ -12,34 +12,6 @@
 
 #include <poplarlib/collector.grpc.pb.h>
 
-poplar::EventMetrics createMetricsEvent(const std::string& name) {
-    poplar::EventMetrics out;
-    // only need to send this the first time
-    out.set_name(name);
-    out.mutable_timers()->mutable_duration()->set_nanos(100);
-    out.mutable_timers()->mutable_duration()->set_seconds(30);
-
-    out.mutable_counters()->set_errors(0);
-    // increment number every time the Actor sends an event - it's incremented once per iteration of
-    // the test
-    out.mutable_counters()->set_number(1);
-    // ops is number of things done in that iteration
-    out.mutable_counters()->set_ops(1);
-    // bytes
-    out.mutable_counters()->set_size(32893043);
-
-    // phase of test
-    out.mutable_gauges()->set_state(1);
-    // threads
-    out.mutable_gauges()->set_workers(1);
-    out.mutable_gauges()->set_failed(false);
-
-    // TODO: what's the difference between time and timers?
-    out.mutable_time()->set_seconds(50000);
-    out.mutable_time()->set_nanos(30);
-    return out;
-}
-
 auto randomSuffix(const std::string& prefix) {
     boost::random::mt19937_64 rng;
     rng.seed(std::chrono::system_clock::now().time_since_epoch().count());
@@ -165,6 +137,7 @@ private:
 };
 
 class OperationImpl {
+    // TODO
     enum class State {
         kOpen,
         kClosed,
@@ -175,31 +148,60 @@ class OperationImpl {
         str << actorName << "." << opName;
         return str.str();
     }
+
+    static poplar::EventMetrics createMetricsEvent(const std::string& name) {
+        poplar::EventMetrics out;
+        // only need to send this the first time
+        out.set_name(name);
+        reset(out);
+        return out;
+    }
+
+    static void reset(poplar::EventMetrics& out) {
+        out.mutable_timers()->mutable_duration()->set_nanos(0);
+        out.mutable_timers()->mutable_duration()->set_seconds(0);
+
+        out.mutable_counters()->set_errors(0);
+        // increment number every time the Actor sends an event - it's incremented once per iteration of
+        // the test
+        out.mutable_counters()->set_number(0);
+        // ops is number of things done in that iteration
+        out.mutable_counters()->set_ops(0);
+        // bytes
+        out.mutable_counters()->set_size(0);
+
+        // phase of test
+        out.mutable_gauges()->set_state(0);
+        // threads
+        out.mutable_gauges()->set_workers(0);
+        out.mutable_gauges()->set_failed(false);
+
+        // TODO: what's the difference between time and timers?
+        out.mutable_time()->set_seconds(0);
+        out.mutable_time()->set_nanos(0);
+    }
 public:
     OperationImpl(const std::string& actorName,
                   const std::string& opName,
                   UPStub& stub)
     : _state{State::kClosed},
       _name{makeName(actorName, opName)},
-      _storage{},
       _collector{stub, _name},
-      _stream{stub} {
-        _storage.set_name(_name);
-    }
+      _stream{stub},
+      _storage{createMetricsEvent(_name)} {}
 
     void success() {
         this->report();
+        reset(_storage);
     }
 
     void addBytes(int bytes) {
         _storage.mutable_counters()->set_size(
                 _storage.mutable_counters()->size() + bytes);
-        std::cout << "Added bytes to \n" << _storage.DebugString() << std::endl;
     }
 
     void report() {
         _stream.write(_storage);
-        std::cout << "Wrote \n" << _storage.DebugString() << std::endl;
     }
 private:
     State _state;
@@ -252,8 +254,8 @@ public:
     explicit Registry(UPStub stub)
     : _stub{std::move(stub)}, _ops{} {}
 
-    Operation operation(std::string actorName,
-                         std::string opName,
+    Operation operation(const std::string& actorName,
+                         const std::string& opName,
                          int actorId) {
         auto& opsByType = this->_ops[actorName];
         auto& opsByThread = opsByType[opName];
@@ -261,11 +263,10 @@ public:
         auto opIt =
                 opsByThread
                         .try_emplace(actorId,
-                                     std::move(actorName),
-                                     std::move(opName),
+                                     actorName,
+                                     opName,
                                      _stub)
                         .first;
-        std::cout << "Created OperationImpl" << std::endl;
         return Operation{opIt->second};
     }
 
@@ -280,15 +281,16 @@ int main() {
     // disable output buffering
     std::cout.rdbuf()->pubsetbuf(nullptr, 0);
 
-    const std::string name = randomName();
-
     Registry reg{createCollectorStub()};
     auto op = reg.operation("Insert", "InsertRemove", 1);
     std::cout << "Created op." << std::endl;
 
-    auto ctx = op.start();
-    ctx.addBytes(1234);
-    ctx.success();
+    for(int i=0; i < 10000; ++i) {
+        auto ctx = op.start();
+        ctx.addBytes(1234 + i);
+        ctx.success();
+    }
+
 
 //    auto stub = createCollectorStub();
 //    auto collector = Collector(stub, name);
