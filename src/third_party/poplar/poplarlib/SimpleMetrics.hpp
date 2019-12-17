@@ -44,6 +44,7 @@ poplar::CreateOptions createOptions(const std::string& name) {
     options.set_dynamic(false);
     // may not matter but shrug it works
     options.set_recorder(poplar::CreateOptions_RecorderType_PERF);
+    options.set_events(poplar::CreateOptions_EventsCollectorType_BASIC);
     return options;
 }
 
@@ -153,11 +154,17 @@ class OperationImpl {
         poplar::EventMetrics out;
         // only need to send this the first time
         out.set_name(name);
-        reset(out);
+        reset(out, false);
         return out;
     }
 
-    static void reset(poplar::EventMetrics& out) {
+    static void reset(poplar::EventMetrics& out, bool clearName) {
+        if (clearName) {
+            // only need to send this the first time
+            out.clear_name();
+        }
+
+
         out.mutable_timers()->mutable_duration()->set_nanos(0);
         out.mutable_timers()->mutable_duration()->set_seconds(0);
 
@@ -191,7 +198,7 @@ public:
 
     void success() {
         this->report();
-        reset(_storage);
+        reset(_storage, true);
     }
 
     void addDocuments(int docs) {
