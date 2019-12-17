@@ -59,15 +59,17 @@ UPStub createCollectorStub() {
 class EventStream {
 public:
     explicit EventStream(UPStub& stub)
-            : _response{},
+            : _options{},
+              _response{},
               _context{},
             // multiple streams can write to the same collector name
               _stream{stub->StreamEvents(&_context, &_response)} {
         std::cout << "Created stream. response:\n" << _response.DebugString() << std::endl;
+        _options.set_no_compression().set_buffer_hint();
     }
 
     void write(const poplar::EventMetrics& event) {
-        auto success = _stream->Write(event);
+        auto success = _stream->Write(event, _options);
         if (!success) {
             std::cout << "Couldn't write: stream was closed";
             throw std::bad_function_call();
@@ -96,6 +98,7 @@ public:
     }
 
 private:
+    grpc::WriteOptions _options;
     poplar::PoplarResponse _response;
     grpc::ClientContext _context;
     UPStream _stream;
