@@ -198,7 +198,7 @@ public:
 
     void success() {
         this->report();
-        reset(_storage, true);
+        reset(_storage, false);
     }
 
     void addDocuments(int docs) {
