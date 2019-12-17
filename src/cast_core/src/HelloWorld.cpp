@@ -46,7 +46,24 @@ struct HelloWorld::PhaseConfig {
           {}
 };
 
+auto& ops() {
+    static std::atomic_int out = 0;
+    return out;
+}
+
+auto& started() {
+    static std::atomic<std::chrono::time_point<std::chrono::system_clock>> start =
+            std::chrono::system_clock::now();
+    return start;
+}
+
+auto& reported() {
+    static std::atomic_bool report = false;
+    return report;
+}
+
 void HelloWorld::run() {
+    started();
     for (auto&& config : _loop) {
         for (auto _ : config) {
             auto ctx = config->operation.start();
@@ -56,10 +73,15 @@ void HelloWorld::run() {
             ctx.addDocuments(1);
             ctx.addBytes(config->message.size());
             ctx.success();
+            ops()++;
 
 //            config->syntheticOperation.report(metrics::clock::now(),
 //                                              std::chrono::milliseconds{_helloCounter});
         }
+    }
+    if(!reported().exchange(true)) { // was false now true
+        std::cout << "Took " << std::chrono::duration_cast<std::chrono::seconds>(
+          std::chrono::system_clock::now() - started().load()).count() << " seconds to do " << ops() << " ops." << std::endl;
     }
 }
 

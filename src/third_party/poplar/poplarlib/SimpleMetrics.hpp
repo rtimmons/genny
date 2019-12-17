@@ -1,3 +1,4 @@
+#include <atomic>
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
@@ -29,14 +30,20 @@ auto randomName() {
     return randomSuffix("InsertRemove.Insert");
 }
 
+auto createPath(const std::string& name) {
+    std::stringstream str;
+    str << name << ".ftdc";
+    return str.str();
+}
+
 poplar::CreateOptions createOptions(const std::string& name) {
     poplar::CreateOptions options;
     options.set_name(name);
     options.set_events(poplar::CreateOptions_EventsCollectorType_BASIC);
     // end in .ftdc -- each stream should have a different path -- unique id for the stream
-    options.set_path(randomPath());
+    options.set_path(createPath(name));
     // how many events between compression and write events
-    options.set_chunksize(10000);  // probably not less than 10k maybe more - play with it; less
+    options.set_chunksize(1000);  // probably not less than 10k maybe more - play with it; less
     // means more time in cpu&io to compress
     // flush to disk intermittently
     options.set_streaming(true);
@@ -64,7 +71,6 @@ public:
               _context{},
             // multiple streams can write to the same collector name
               _stream{stub->StreamEvents(&_context, &_response)} {
-        std::cout << "Created stream. response:\n" << _response.DebugString() << std::endl;
         _options.set_no_compression().set_buffer_hint();
     }
 
@@ -104,6 +110,9 @@ private:
     UPStream _stream;
 };
 
+static std::atomic_bool opened = false;
+static std::atomic_bool closed = false;
+
 class Collector {
 public:
     explicit Collector(UPStub& stub, const std::string& name) : _stub{stub}, _id{} {
@@ -112,6 +121,10 @@ public:
         grpc::ClientContext context;
         poplar::PoplarResponse response;
         poplar::CreateOptions options = createOptions(name);
+        if(opened.exchange(true)) { // was true now true
+            return;
+        }
+        // was false now true
         auto status = _stub->CreateCollector(&context, options, &response);
         if (!status.ok()) {
             std::cout << "Status not okay\n" << status.error_message();
@@ -121,6 +134,11 @@ public:
     }
 
     ~Collector() {
+        if(closed.exchange(true)) { // was true now true
+            return;
+        }
+        // was false now true
+
         std::cout << "Closing collector." << std::endl;
         if (!_stub) {
             return;
@@ -147,9 +165,9 @@ class OperationImpl {
         kOpen,
         kClosed,
     };
-    static std::string makeName(const std::string& actorName, const std::string& opName, int actorId) {
+    static std::string makeName(const std::string& actorName, const std::string& opName) {
         std::stringstream str;
-        str << actorName << "." << opName << "." << actorId;
+        str << actorName << "." << opName;
         return str.str();
     }
 
@@ -194,7 +212,7 @@ class OperationImpl {
 public:
     OperationImpl(const std::string& actorName, const std::string& opName, int actorId, UPStub& stub)
             : _state{State::kClosed},
-              _name{makeName(actorName, opName, actorId)},
+              _name{makeName(actorName, opName)},
               _collector{stub, _name},
               _stream{stub},
               _storage{createMetricsEvent(_name)} {}
