@@ -66,6 +66,8 @@ private:
 
 class Collector {
 public:
+    Collector(const Collector&) = delete;
+
     explicit Collector(UPStub& stub, std::string name) : _name{std::move(name)}, _stub{stub}, _id{} {
         _id.set_name(_name);
 
@@ -255,9 +257,13 @@ public:
 
     Operation operation(const std::string& actorName, const std::string& opName, int actorId) {
         std::string name = actorDotOp(actorName, opName);
-        // lolz
-        auto& collector = _collectors.try_emplace(name, name, _stub, name).first->second;
-        return collector.operation(actorId);
+        if (auto it = _collectors.find(name); it == _collectors.end()) {
+            // lolz
+            auto inserted = _collectors.insert({name, CollectorAndOps{name, _stub, name}});
+            return inserted.first->second.operation(actorId);
+        } else {
+            return it->second.operation(actorId);
+        }
     }
 
 private:

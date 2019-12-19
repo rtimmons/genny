@@ -24,10 +24,10 @@
 
 namespace genny::actor {
 
-struct HelloWorld::Other {
-    simplemetrics::Registry registry;
-    explicit Other() = default;
-};
+simplemetrics::Registry& reg() {
+    static simplemetrics::Registry singleton{};
+    return singleton;
+}
 
 /** @private */
 struct HelloWorld::PhaseConfig {
@@ -38,9 +38,9 @@ struct HelloWorld::PhaseConfig {
 
 //    simplemetrics::Operation syntheticOperation;
 
-    explicit PhaseConfig(PhaseContext& context, ActorId actorId, std::unique_ptr<HelloWorld::Other>& other)
+    explicit PhaseConfig(PhaseContext& context, ActorId actorId)
         : message{context["Message"].maybe<std::string>().value_or("Hello, World!")},
-          operation{other->registry.operation("HelloWorld", "Write", actorId)}
+          operation{reg().operation("HelloWorld", "Write", actorId)}
           // syntheticOperation{other->registry.operation("HelloWorld", "SyntheticOperation", actorId)}
           {}
 };
@@ -86,9 +86,8 @@ void HelloWorld::run() {
 
 HelloWorld::HelloWorld(genny::ActorContext& context)
     : Actor(context),
-      _other{std::make_unique<Other>()},
       _helloCounter{WorkloadContext::getActorSharedState<HelloWorld, HelloWorldCounter>()},
-      _loop{context, HelloWorld::id(), _other} {}
+      _loop{context, HelloWorld::id()} {}
 
 namespace {
 auto registerHelloWorld = genny::Cast::registerDefault<genny::actor::HelloWorld>();
