@@ -213,7 +213,6 @@ public:
 private:
     State _state;
     poplar::EventMetrics _storage;
-    std::unique_ptr<Collector> _collector;
     std::unique_ptr<EventStream> _stream;
 };
 
