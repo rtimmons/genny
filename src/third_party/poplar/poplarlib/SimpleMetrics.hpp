@@ -64,8 +64,8 @@ private:
     UPStream _stream;
 };
 
-static std::atomic_bool opened = false;
-static std::atomic_bool closed = false;
+//static std::atomic_bool opened = false;
+//static std::atomic_bool closed = false;
 
 class Collector {
 public:
@@ -75,9 +75,9 @@ public:
         grpc::ClientContext context;
         poplar::PoplarResponse response;
         poplar::CreateOptions options = createOptions(name);
-        if(opened.exchange(true)) { // was true now true
-            return;
-        }
+//        if(opened.exchange(true)) { // was true now true
+//            return;
+//        }
         // was false now true
         auto status = _stub->CreateCollector(&context, options, &response);
         if (!status.ok()) {
@@ -88,10 +88,10 @@ public:
     }
 
     ~Collector() {
-        if(closed.exchange(true)) { // was true now true
-            return;
-        }
-        // was false now true
+//        if(closed.exchange(true)) { // was true now true
+//            return;
+//        }
+//        // was false now true
 
         std::cout << "Closing collector." << std::endl;
         if (!_stub) {
@@ -189,11 +189,8 @@ class OperationImpl {
     }
 
 public:
-    OperationImpl(const std::string& actorName, const std::string& opName, int actorId, UPStub& stub)
+    OperationImpl(const std::string name)
             : _state{State::kClosed},
-              _name{makeName(actorName, opName)},
-              _collector{std::make_unique<Collector>(stub, _name)},
-              _stream{std::make_unique<EventStream>(stub)},
               _storage{createMetricsEvent(_name)} {}
 
     void success() {
@@ -215,7 +212,6 @@ public:
 
 private:
     State _state;
-    std::string _name;
     poplar::EventMetrics _storage;
     std::unique_ptr<Collector> _collector;
     std::unique_ptr<EventStream> _stream;
@@ -253,24 +249,42 @@ private:
     OperationImpl* _impl;
 };
 
+struct CollectorAndOps {
+    template<typename... Args>
+    CollectorAndOps(Args&&... args)
+    : _collector{std::make_unique<Collector>(std::forward<Args>(args)...)},
+      _ops{} {}
+    std::unique_ptr<Collector> _collector;
+    std::unordered_map<int /*ActorId*/, OperationImpl> _ops;
+
+    OperationImpl& operation()
+};
+
+//template<typename T>
+//class TD;
+
+auto actorDotOp(const std::string& actorName, const std::string& opName) {
+    std::stringstream str;
+    str << actorName << "." << opName;
+    return str.str();
+}
+
 class Registry {
 private:
-    // Thread -> EventStream
-    using OperationsByThread = std::unordered_map<int /*ActorId*/, OperationImpl>;
     // OperationName -> all threads for that OperationName
-    using OperationsByType = std::unordered_map<std::string, OperationsByThread>;
-    // OperationsMap is a map of
-    // actor name -> operation name -> actor id -> OperationImpl (time series).
-    using OperationsMap = std::unordered_map<std::string, OperationsByType>;
-
+    using Collectors = std::unordered_map<std::string, CollectorAndOps>;
 public:
     explicit Registry() : _stub{createCollectorStub()}, _ops{} {}
 
     Operation operation(const std::string& actorName, const std::string& opName, int actorId) {
-        auto& opsByType = this->_ops[actorName];
-        auto& opsByThread = opsByType[opName];
-        // opIt is pair<actorid,operationImpl>
-        auto opIt = opsByThread.try_emplace(actorId, actorName, opName, actorId, _stub).first;
+        const auto name = actorDotOp(actorName, opName);
+        const auto& collectorAndOpsIter = _collectors.try_emplace(
+                name,
+                _stub,
+                name
+        );
+        const auto& opIt = collectorAndOpsIter.first->second._ops.try_emplace(actorId,
+        )
         return Operation{opIt->second};
     }
 
@@ -281,7 +295,7 @@ private:
     }
 
     UPStub _stub;
-    OperationsMap _ops;
+    Collectors _collectors;
 };
 
 }  // namespace simplemetrics
