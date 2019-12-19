@@ -8,7 +8,7 @@ int main() {
     // disable output buffering
     std::cout.rdbuf()->pubsetbuf(nullptr, 0);
 
-    Registry reg{createCollectorStub()};
+    Registry reg;
     auto op = reg.operation("Insert", "InsertRemove", 1);
     std::cout << "Created op." << std::endl;
 

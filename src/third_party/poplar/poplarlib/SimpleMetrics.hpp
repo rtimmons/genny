@@ -17,11 +17,6 @@ namespace simplemetrics {
 using UPStub = std::unique_ptr<poplar::PoplarEventCollector::Stub>;
 using UPStream = std::unique_ptr<grpc::ClientWriter<poplar::EventMetrics>>;
 
-UPStub createCollectorStub() {
-    auto channel = grpc::CreateChannel("localhost:2288", grpc::InsecureChannelCredentials());
-    return poplar::PoplarEventCollector::NewStub(channel);
-}
-
 class EventStream {
 public:
     explicit EventStream(UPStub& stub)
@@ -269,7 +264,7 @@ private:
     using OperationsMap = std::unordered_map<std::string, OperationsByType>;
 
 public:
-    explicit Registry(UPStub stub) : _stub{std::move(stub)}, _ops{} {}
+    explicit Registry() : _stub{createCollectorStub()}, _ops{} {}
 
     Operation operation(const std::string& actorName, const std::string& opName, int actorId) {
         auto& opsByType = this->_ops[actorName];
@@ -280,6 +275,11 @@ public:
     }
 
 private:
+    static UPStub createCollectorStub() {
+        auto channel = grpc::CreateChannel("localhost:2288", grpc::InsecureChannelCredentials());
+        return poplar::PoplarEventCollector::NewStub(channel);
+    }
+
     UPStub _stub;
     OperationsMap _ops;
 };

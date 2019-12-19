@@ -26,8 +26,7 @@ namespace genny::actor {
 
 struct HelloWorld::Other {
     simplemetrics::Registry registry;
-    explicit Other()
-    : registry{simplemetrics::createCollectorStub()} {}
+    explicit Other() = default;
 };
 
 /** @private */
