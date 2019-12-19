@@ -14,47 +14,6 @@
 
 namespace simplemetrics {
 
-auto randomSuffix(const std::string& prefix) {
-    boost::random::mt19937_64 rng;
-    rng.seed(std::chrono::system_clock::now().time_since_epoch().count());
-    std::stringstream out;
-    out << prefix << rng();
-    return out.str();
-}
-
-auto randomPath() {
-    return randomSuffix("run");
-}
-
-auto randomName() {
-    return randomSuffix("InsertRemove.Insert");
-}
-
-auto createPath(const std::string& name) {
-    std::stringstream str;
-    str << name << ".ftdc";
-    return str.str();
-}
-
-poplar::CreateOptions createOptions(const std::string& name) {
-    poplar::CreateOptions options;
-    options.set_name(name);
-    options.set_events(poplar::CreateOptions_EventsCollectorType_BASIC);
-    // end in .ftdc -- each stream should have a different path -- unique id for the stream
-    options.set_path(createPath(name));
-    // how many events between compression and write events
-    options.set_chunksize(1000);  // probably not less than 10k maybe more - play with it; less
-    // means more time in cpu&io to compress
-    // flush to disk intermittently
-    options.set_streaming(true);
-    // dynamic means shape changes over time
-    options.set_dynamic(false);
-    // may not matter but shrug it works
-    options.set_recorder(poplar::CreateOptions_RecorderType_PERF);
-    options.set_events(poplar::CreateOptions_EventsCollectorType_BASIC);
-    return options;
-}
-
 using UPStub = std::unique_ptr<poplar::PoplarEventCollector::Stub>;
 using UPStream = std::unique_ptr<grpc::ClientWriter<poplar::EventMetrics>>;
 
@@ -154,6 +113,31 @@ public:
     }
 
 private:
+    static auto createPath(const std::string& name) {
+        std::stringstream str;
+        str << name << ".ftdc";
+        return str.str();
+    }
+
+    static poplar::CreateOptions createOptions(const std::string& name) {
+        poplar::CreateOptions options;
+        options.set_name(name);
+        options.set_events(poplar::CreateOptions_EventsCollectorType_BASIC);
+        // end in .ftdc -- each stream should have a different path -- unique id for the stream
+        options.set_path(createPath(name));
+        // how many events between compression and write events
+        options.set_chunksize(1000);  // probably not less than 10k maybe more - play with it; less
+        // means more time in cpu&io to compress
+        // flush to disk intermittently
+        options.set_streaming(true);
+        // dynamic means shape changes over time
+        options.set_dynamic(false);
+        // may not matter but shrug it works
+        options.set_recorder(poplar::CreateOptions_RecorderType_PERF);
+        options.set_events(poplar::CreateOptions_EventsCollectorType_BASIC);
+        return options;
+    }
+
     UPStub& _stub;
     // _id should always be the same as the name in the options to createcollector
     poplar::PoplarID _id;
