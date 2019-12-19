@@ -69,16 +69,12 @@ private:
 
 class Collector {
 public:
-    explicit Collector(UPStub& stub, const std::string& name) : _stub{stub}, _id{} {
-        _id.set_name(name);
+    explicit Collector(UPStub& stub, std::string name) : _name{std::move(name)}, _stub{stub}, _id{} {
+        _id.set_name(_name);
 
         grpc::ClientContext context;
         poplar::PoplarResponse response;
-        poplar::CreateOptions options = createOptions(name);
-//        if(opened.exchange(true)) { // was true now true
-//            return;
-//        }
-        // was false now true
+        poplar::CreateOptions options = createOptions(_name);
         auto status = _stub->CreateCollector(&context, options, &response);
         if (!status.ok()) {
             std::cout << "Status not okay\n" << status.error_message();
@@ -88,11 +84,6 @@ public:
     }
 
     ~Collector() {
-//        if(closed.exchange(true)) { // was true now true
-//            return;
-//        }
-//        // was false now true
-
         std::cout << "Closing collector." << std::endl;
         if (!_stub) {
             return;
@@ -133,23 +124,13 @@ private:
         return options;
     }
 
+    std::string _name;
     UPStub& _stub;
     // _id should always be the same as the name in the options to createcollector
     poplar::PoplarID _id;
 };
 
 class OperationImpl {
-    // TODO
-    enum class State {
-        kOpen,
-        kClosed,
-    };
-    static std::string makeName(const std::string& actorName, const std::string& opName) {
-        std::stringstream str;
-        str << actorName << "." << opName;
-        return str.str();
-    }
-
     static poplar::EventMetrics createMetricsEvent(const std::string& name) {
         poplar::EventMetrics out;
         // only need to send this the first time
@@ -163,7 +144,6 @@ class OperationImpl {
             // only need to send this the first time
             out.clear_name();
         }
-
 
         out.mutable_timers()->mutable_duration()->set_nanos(0);
         out.mutable_timers()->mutable_duration()->set_seconds(0);
@@ -189,9 +169,8 @@ class OperationImpl {
     }
 
 public:
-    OperationImpl(const std::string name)
-            : _state{State::kClosed},
-              _storage{createMetricsEvent(_name)} {}
+    explicit OperationImpl(std::string name)
+    : _storage{createMetricsEvent(name)} {}
 
     void success() {
         this->report();
@@ -211,7 +190,6 @@ public:
     }
 
 private:
-    State _state;
     poplar::EventMetrics _storage;
     std::unique_ptr<EventStream> _stream;
 };
@@ -248,21 +226,26 @@ private:
     OperationImpl* _impl;
 };
 
-struct CollectorAndOps {
+class CollectorAndOps {
+public:
     template<typename... Args>
-    CollectorAndOps(Args&&... args)
-    : _collector{std::make_unique<Collector>(std::forward<Args>(args)...)},
+    CollectorAndOps(std::string name, Args&&... args)
+    : _name{std::move(name)},
+      _collector{std::make_unique<Collector>(std::forward<Args>(args)...)},
       _ops{} {}
+
+    OperationImpl& operation();
+
+private:
+    std::string _name;
     std::unique_ptr<Collector> _collector;
     std::unordered_map<int /*ActorId*/, OperationImpl> _ops;
-
-    OperationImpl& operation()
 };
 
 //template<typename T>
 //class TD;
 
-auto actorDotOp(const std::string& actorName, const std::string& opName) {
+static auto actorDotOp(const std::string& actorName, const std::string& opName) {
     std::stringstream str;
     str << actorName << "." << opName;
     return str.str();
@@ -273,18 +256,13 @@ private:
     // OperationName -> all threads for that OperationName
     using Collectors = std::unordered_map<std::string, CollectorAndOps>;
 public:
-    explicit Registry() : _stub{createCollectorStub()}, _ops{} {}
+    explicit Registry() : _stub{createCollectorStub()}, _collectors{} {}
 
     Operation operation(const std::string& actorName, const std::string& opName, int actorId) {
-        const auto name = actorDotOp(actorName, opName);
-        const auto& collectorAndOpsIter = _collectors.try_emplace(
-                name,
-                _stub,
-                name
-        );
-        const auto& opIt = collectorAndOpsIter.first->second._ops.try_emplace(actorId,
-        )
-        return Operation{opIt->second};
+        std::string name = actorDotOp(actorName, opName);
+        if(auto it = _collectors.find(name); it == _collectors.end()) {
+            _collectors.emplace(name, )
+        }
     }
 
 private:
