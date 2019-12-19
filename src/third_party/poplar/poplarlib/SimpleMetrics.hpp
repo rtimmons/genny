@@ -64,9 +64,6 @@ private:
     UPStream _stream;
 };
 
-//static std::atomic_bool opened = false;
-//static std::atomic_bool closed = false;
-
 class Collector {
 public:
     explicit Collector(UPStub& stub, std::string name) : _name{std::move(name)}, _stub{stub}, _id{} {
@@ -169,7 +166,7 @@ class OperationImpl {
     }
 
 public:
-    explicit OperationImpl(std::string name)
+    explicit OperationImpl(const std::string& name)
     : _storage{createMetricsEvent(name)} {}
 
     void success() {
@@ -229,21 +226,22 @@ private:
 class CollectorAndOps {
 public:
     template<typename... Args>
-    CollectorAndOps(std::string name, Args&&... args)
+    explicit CollectorAndOps(std::string name, Args&&... args)
     : _name{std::move(name)},
       _collector{std::make_unique<Collector>(std::forward<Args>(args)...)},
       _ops{} {}
 
-    OperationImpl& operation();
+    Operation operation(int actorId) {
+        const auto& impl = _ops.try_emplace(actorId, _name);
+        return Operation{impl.first->second};
+    }
 
 private:
     std::string _name;
     std::unique_ptr<Collector> _collector;
-    std::unordered_map<int /*ActorId*/, OperationImpl> _ops;
+    // actorId => ops
+    std::unordered_map<int, OperationImpl> _ops;
 };
-
-//template<typename T>
-//class TD;
 
 static auto actorDotOp(const std::string& actorName, const std::string& opName) {
     std::stringstream str;
@@ -252,17 +250,14 @@ static auto actorDotOp(const std::string& actorName, const std::string& opName) 
 }
 
 class Registry {
-private:
-    // OperationName -> all threads for that OperationName
-    using Collectors = std::unordered_map<std::string, CollectorAndOps>;
 public:
-    explicit Registry() : _stub{createCollectorStub()}, _collectors{} {}
+    explicit Registry() : _stub{createCollectorStub()} {}
 
     Operation operation(const std::string& actorName, const std::string& opName, int actorId) {
         std::string name = actorDotOp(actorName, opName);
-        if(auto it = _collectors.find(name); it == _collectors.end()) {
-            _collectors.emplace(name, )
-        }
+        // lolz
+        auto& collector = _collectors.try_emplace(name, name, _stub, name).first->second;
+        return collector.operation(actorId);
     }
 
 private:
@@ -272,7 +267,7 @@ private:
     }
 
     UPStub _stub;
-    Collectors _collectors;
+    std::unordered_map<std::string, CollectorAndOps> _collectors{};
 };
 
 }  // namespace simplemetrics
