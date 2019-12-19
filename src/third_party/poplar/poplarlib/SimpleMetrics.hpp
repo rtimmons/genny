@@ -192,8 +192,8 @@ public:
     OperationImpl(const std::string& actorName, const std::string& opName, int actorId, UPStub& stub)
             : _state{State::kClosed},
               _name{makeName(actorName, opName)},
-              _collector{stub, _name},
-              _stream{stub},
+              _collector{std::make_unique<Collector>(stub, _name)},
+              _stream{std::make_unique<EventStream>(stub)},
               _storage{createMetricsEvent(_name)} {}
 
     void success() {
@@ -210,15 +210,15 @@ public:
     }
 
     void report() {
-        _stream.write(_storage);
+        _stream->write(_storage);
     }
 
 private:
     State _state;
     std::string _name;
     poplar::EventMetrics _storage;
-    Collector _collector;
-    EventStream _stream;
+    std::unique_ptr<Collector> _collector;
+    std::unique_ptr<EventStream> _stream;
 };
 
 class OperationContext {
