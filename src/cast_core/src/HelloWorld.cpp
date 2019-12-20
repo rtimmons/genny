@@ -36,13 +36,13 @@ struct HelloWorld::PhaseConfig {
     /** record data about each iteration */
     simplemetrics::Operation operation;
 
-//    simplemetrics::Operation syntheticOperation;
+    //    simplemetrics::Operation syntheticOperation;
 
     explicit PhaseConfig(PhaseContext& context, ActorId actorId)
         : message{context["Message"].maybe<std::string>().value_or("Hello, World!")},
           operation{reg().operation("HelloWorld", "Write", actorId)}
-          // syntheticOperation{other->registry.operation("HelloWorld", "SyntheticOperation", actorId)}
-          {}
+    // syntheticOperation{other->registry.operation("HelloWorld", "SyntheticOperation", actorId)}
+    {}
 };
 
 auto& ops() {
@@ -52,7 +52,7 @@ auto& ops() {
 
 auto& started() {
     static std::atomic<std::chrono::time_point<std::chrono::system_clock>> start =
-            std::chrono::system_clock::now();
+        std::chrono::system_clock::now();
     return start;
 }
 
@@ -66,21 +66,24 @@ void HelloWorld::run() {
     for (auto&& config : _loop) {
         for (auto _ : config) {
             auto ctx = config->operation.start();
-//            BOOST_LOG_TRIVIAL(info) << config->message;
-//            ++_helloCounter;
-//            BOOST_LOG_TRIVIAL(info) << "Counter: " << _helloCounter;
+            //            BOOST_LOG_TRIVIAL(info) << config->message;
+            //            ++_helloCounter;
+            //            BOOST_LOG_TRIVIAL(info) << "Counter: " << _helloCounter;
             ctx.addDocuments(1);
             ctx.addBytes(config->message.size());
             ctx.success();
             ops()++;
 
-//            config->syntheticOperation.report(metrics::clock::now(),
-//                                              std::chrono::milliseconds{_helloCounter});
+            //            config->syntheticOperation.report(metrics::clock::now(),
+            //                                              std::chrono::milliseconds{_helloCounter});
         }
     }
-    if(!reported().exchange(true)) { // was false now true
-        std::cout << "Took " << std::chrono::duration_cast<std::chrono::seconds>(
-          std::chrono::system_clock::now() - started().load()).count() << " seconds to do " << ops() << " ops." << std::endl;
+    if (!reported().exchange(true)) {  // was false now true
+        std::cout << "Took "
+                  << std::chrono::duration_cast<std::chrono::seconds>(
+                         std::chrono::system_clock::now() - started().load())
+                         .count()
+                  << " seconds to do " << ops() << " ops." << std::endl;
     }
 }
 

@@ -174,14 +174,14 @@ DefaultDriver::OutcomeCode doRunLogic(const DefaultDriver::ProgramOptions& optio
     for (auto& thread : threads)
         thread.join();
 
-//    const auto reporter = genny::metrics::Reporter{metrics};
-//
-//    {
-//        std::ofstream metricsOutput;
-//        metricsOutput.open(options.metricsOutputFileName,
-//                           std::ofstream::out | std::ofstream::trunc);
-//        reporter.report(metricsOutput, options.metricsFormat);
-//    }
+    //    const auto reporter = genny::metrics::Reporter{metrics};
+    //
+    //    {
+    //        std::ofstream metricsOutput;
+    //        metricsOutput.open(options.metricsOutputFileName,
+    //                           std::ofstream::out | std::ofstream::trunc);
+    //        reporter.report(metricsOutput, options.metricsFormat);
+    //    }
 
     return outcomeCode;
 }

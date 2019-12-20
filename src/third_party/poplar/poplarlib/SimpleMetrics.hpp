@@ -20,11 +20,11 @@ using UPStream = std::unique_ptr<grpc::ClientWriter<poplar::EventMetrics>>;
 class EventStream {
 public:
     explicit EventStream(UPStub& stub)
-            : _options{},
-              _response{},
-              _context{},
-            // multiple streams can write to the same collector name
-              _stream{stub->StreamEvents(&_context, &_response)} {
+        : _options{},
+          _response{},
+          _context{},
+          // multiple streams can write to the same collector name
+          _stream{stub->StreamEvents(&_context, &_response)} {
         _options.set_no_compression().set_buffer_hint();
     }
 
@@ -68,7 +68,8 @@ class Collector {
 public:
     Collector(const Collector&) = delete;
 
-    explicit Collector(UPStub& stub, std::string name) : _name{std::move(name)}, _stub{stub}, _id{} {
+    explicit Collector(UPStub& stub, std::string name)
+        : _name{std::move(name)}, _stub{stub}, _id{} {
         _id.set_name(_name);
 
         grpc::ClientContext context;
@@ -168,8 +169,7 @@ class OperationImpl {
     }
 
 public:
-    explicit OperationImpl(const std::string& name)
-    : _storage{createMetricsEvent(name)} {}
+    explicit OperationImpl(const std::string& name) : _storage{createMetricsEvent(name)} {}
 
     void success() {
         this->report();
@@ -227,11 +227,11 @@ private:
 
 class CollectorAndOps {
 public:
-    template<typename... Args>
+    template <typename... Args>
     explicit CollectorAndOps(std::string name, Args&&... args)
-    : _name{std::move(name)},
-      _collector{std::make_unique<Collector>(std::forward<Args>(args)...)},
-      _ops{} {}
+        : _name{std::move(name)},
+          _collector{std::make_unique<Collector>(std::forward<Args>(args)...)},
+          _ops{} {}
 
     Operation operation(int actorId) {
         const auto& impl = _ops.try_emplace(actorId, _name);
