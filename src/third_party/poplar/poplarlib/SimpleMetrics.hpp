@@ -14,8 +14,8 @@
 
 namespace simplemetrics {
 
-using UPStub = std::unique_ptr<poplar::PoplarEventCollector::Stub>;
-using UPStream = std::unique_ptr<grpc::ClientWriter<poplar::EventMetrics>>;
+using UPStub = std::unique_ptr<poplar::PoplarEventCollector::StubInterface>;
+using UPStream = std::unique_ptr<grpc::ClientWriterInterface<poplar::EventMetrics>>;
 
 class EventStream {
 public:
