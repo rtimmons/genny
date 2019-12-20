@@ -76,6 +76,7 @@ private:
 
     grpc::ClientWriterInterface<poplar::EventMetrics> *
     StreamEventsRaw(::grpc::ClientContext *context, ::poplar::PoplarResponse *response) override {
+        // TODO: this leaks!
         return new MockStream();
     }
 
@@ -124,23 +125,18 @@ public:
     }
 
     ~EventStream() {
-        std::cout << "Closing EventStream." << std::endl;
         if (!_stream) {
             std::cout << "No _stream." << std::endl;
             return;
         }
-        std::cout << "Calling Finish." << std::endl;
         if (!_stream->WritesDone()) {
             // TODO: barf
             std::cout << "Errors in doing the writes?" << std::endl;
         }
         auto status = _stream->Finish();
-        std::cout << "Called Finish." << std::endl;
         if (!status.ok()) {
             std::cout << "Problem closing the stream:\n"
                       << _context.debug_error_string() << std::endl;
-        } else {
-            std::cout << "Closed stream" << std::endl;
         }
     }
 
@@ -167,11 +163,9 @@ public:
             std::cout << "Status not okay\n" << status.error_message();
             throw std::bad_function_call();
         }
-        std::cout << "Created collector with options\n" << options.DebugString() << std::endl;
     }
 
     ~Collector() {
-        std::cout << "Closing collector." << std::endl;
         if (!_stub) {
             return;
         }
@@ -182,7 +176,6 @@ public:
         if (!status.ok()) {
             std::cout << "Couldn't close collector: " << status.error_message();
         }
-        std::cout << "Closed collector with id \n" << _id.DebugString() << std::endl;
     }
 
 private:
@@ -346,7 +339,6 @@ public:
 
     Operation operation(const std::string& actorName, const std::string& opName, int actorId) {
         std::string name = actorDotOp(actorName, opName);
-        std::cout << "Creating operation " << name << std::endl;
         if (auto it = _collectors.find(name); it == _collectors.end()) {
             // lolz
             auto inserted = _collectors.insert({name, CollectorAndOps{name, _stub, name}});
