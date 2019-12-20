@@ -125,9 +125,11 @@ private:
     }
 
     std::string _name;
-    UPStub& _stub;
     // _id should always be the same as the name in the options to createcollector
     poplar::PoplarID _id;
+
+public:
+    UPStub& _stub;
 };
 
 class OperationImpl {
@@ -169,7 +171,7 @@ class OperationImpl {
     }
 
 public:
-    explicit OperationImpl(const std::string& name) : _storage{createMetricsEvent(name)} {}
+    explicit OperationImpl(const std::string& name, UPStub& stub) : _storage{createMetricsEvent(name)}, _stream{std::make_unique<EventStream>(stub)} {}
 
     void success() {
         this->report();
@@ -234,7 +236,7 @@ public:
           _ops{} {}
 
     Operation operation(int actorId) {
-        const auto& impl = _ops.try_emplace(actorId, _name);
+        const auto& impl = _ops.try_emplace(actorId, _name, _collector->_stub);
         return Operation{impl.first->second};
     }
 
@@ -257,6 +259,7 @@ public:
 
     Operation operation(const std::string& actorName, const std::string& opName, int actorId) {
         std::string name = actorDotOp(actorName, opName);
+        std::cout << "Creating operation " << name << std::endl;
         if (auto it = _collectors.find(name); it == _collectors.end()) {
             // lolz
             auto inserted = _collectors.insert({name, CollectorAndOps{name, _stub, name}});

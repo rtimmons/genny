@@ -7,4 +7,4 @@ Actors:
   Threads: 100
   Phases:
   - Message: Hello
-    Repeat: 100000
+    Repeat: 1000
