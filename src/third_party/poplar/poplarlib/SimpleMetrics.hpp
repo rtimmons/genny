@@ -14,12 +14,84 @@
 
 namespace simplemetrics {
 
-using UPStub = std::unique_ptr<poplar::PoplarEventCollector::StubInterface>;
-using UPStream = std::unique_ptr<grpc::ClientWriterInterface<poplar::EventMetrics>>;
+using UPStubInterface = std::unique_ptr<poplar::PoplarEventCollector::StubInterface>;
+using UPStreamInterface = std::unique_ptr<grpc::ClientWriterInterface<poplar::EventMetrics>>;
+
+class MockStub : public poplar::PoplarEventCollector::StubInterface {
+public:
+    grpc::Status CreateCollector(::grpc::ClientContext *context, const ::poplar::CreateOptions &request,
+                                 ::poplar::PoplarResponse *response) override {
+        return grpc::Status();
+    }
+
+    grpc::Status SendEvent(::grpc::ClientContext *context, const ::poplar::EventMetrics &request,
+                           ::poplar::PoplarResponse *response) override {
+        return grpc::Status();
+    }
+
+    grpc::Status CloseCollector(::grpc::ClientContext *context, const ::poplar::PoplarID &request,
+                                ::poplar::PoplarResponse *response) override {
+        return grpc::Status();
+    }
+
+private:
+    grpc::ClientAsyncResponseReaderInterface<poplar::PoplarResponse> *
+    AsyncCreateCollectorRaw(::grpc::ClientContext *context, const ::poplar::CreateOptions &request,
+                            ::grpc::CompletionQueue *cq) override {
+        return nullptr;
+    }
+
+    grpc::ClientAsyncResponseReaderInterface<poplar::PoplarResponse> *
+    PrepareAsyncCreateCollectorRaw(::grpc::ClientContext *context, const ::poplar::CreateOptions &request,
+                                   ::grpc::CompletionQueue *cq) override {
+        return nullptr;
+    }
+
+    grpc::ClientAsyncResponseReaderInterface<poplar::PoplarResponse> *
+    AsyncSendEventRaw(::grpc::ClientContext *context, const ::poplar::EventMetrics &request,
+                      ::grpc::CompletionQueue *cq) override {
+        return nullptr;
+    }
+
+    grpc::ClientAsyncResponseReaderInterface<poplar::PoplarResponse> *
+    PrepareAsyncSendEventRaw(::grpc::ClientContext *context, const ::poplar::EventMetrics &request,
+                             ::grpc::CompletionQueue *cq) override {
+        return nullptr;
+    }
+
+    grpc::ClientWriterInterface<poplar::EventMetrics> *
+    StreamEventsRaw(::grpc::ClientContext *context, ::poplar::PoplarResponse *response) override {
+        return nullptr;
+    }
+
+    grpc::ClientAsyncWriterInterface<poplar::EventMetrics> *
+    AsyncStreamEventsRaw(::grpc::ClientContext *context, ::poplar::PoplarResponse *response,
+                         ::grpc::CompletionQueue *cq, void *tag) override {
+        return nullptr;
+    }
+
+    grpc::ClientAsyncWriterInterface<poplar::EventMetrics> *
+    PrepareAsyncStreamEventsRaw(::grpc::ClientContext *context, ::poplar::PoplarResponse *response,
+                                ::grpc::CompletionQueue *cq) override {
+        return nullptr;
+    }
+
+    grpc::ClientAsyncResponseReaderInterface<poplar::PoplarResponse> *
+    AsyncCloseCollectorRaw(::grpc::ClientContext *context, const ::poplar::PoplarID &request,
+                           ::grpc::CompletionQueue *cq) override {
+        return nullptr;
+    }
+
+    grpc::ClientAsyncResponseReaderInterface<poplar::PoplarResponse> *
+    PrepareAsyncCloseCollectorRaw(::grpc::ClientContext *context, const ::poplar::PoplarID &request,
+                                  ::grpc::CompletionQueue *cq) override {
+        return nullptr;
+    }
+};
 
 class EventStream {
 public:
-    explicit EventStream(UPStub& stub)
+    explicit EventStream(UPStubInterface& stub)
         : _options{},
           _response{},
           _context{},
@@ -61,14 +133,14 @@ private:
     grpc::WriteOptions _options;
     poplar::PoplarResponse _response;
     grpc::ClientContext _context;
-    UPStream _stream;
+    UPStreamInterface _stream;
 };
 
 class Collector {
 public:
     Collector(const Collector&) = delete;
 
-    explicit Collector(UPStub& stub, std::string name)
+    explicit Collector(UPStubInterface& stub, std::string name)
         : _name{std::move(name)}, _stub{stub}, _id{} {
         _id.set_name(_name);
 
@@ -129,7 +201,7 @@ private:
     poplar::PoplarID _id;
 
 public:
-    UPStub& _stub;
+    UPStubInterface& _stub;
 };
 
 class OperationImpl {
@@ -171,7 +243,7 @@ class OperationImpl {
     }
 
 public:
-    explicit OperationImpl(const std::string& name, UPStub& stub) : _storage{createMetricsEvent(name)}, _stream{std::make_unique<EventStream>(stub)} {}
+    explicit OperationImpl(const std::string& name, UPStubInterface& stub) : _storage{createMetricsEvent(name)}, _stream{std::make_unique<EventStream>(stub)} {}
 
     void success() {
         this->report();
@@ -255,7 +327,7 @@ static auto actorDotOp(const std::string& actorName, const std::string& opName) 
 
 class Registry {
 public:
-    explicit Registry() : _stub{createCollectorStub()} {}
+    explicit Registry(bool sendToPoplar = true) : _stub{createCollectorStub(sendToPoplar)} {}
 
     Operation operation(const std::string& actorName, const std::string& opName, int actorId) {
         std::string name = actorDotOp(actorName, opName);
@@ -270,12 +342,15 @@ public:
     }
 
 private:
-    static UPStub createCollectorStub() {
-        auto channel = grpc::CreateChannel("localhost:2288", grpc::InsecureChannelCredentials());
-        return poplar::PoplarEventCollector::NewStub(channel);
+    static UPStubInterface createCollectorStub(bool sendToPoplar) {
+        if (sendToPoplar) {
+            auto channel = grpc::CreateChannel("localhost:2288", grpc::InsecureChannelCredentials());
+            return poplar::PoplarEventCollector::NewStub(channel);
+        }
+        return std::make_unique<MockStub>();
     }
 
-    UPStub _stub;
+    UPStubInterface _stub;
     std::unordered_map<std::string, CollectorAndOps> _collectors{};
 };
 
