@@ -25,7 +25,7 @@
 namespace genny::actor {
 
 simplemetrics::Registry& reg() {
-    static simplemetrics::Registry singleton{};
+    static simplemetrics::Registry singleton{false};
     return singleton;
 }
 

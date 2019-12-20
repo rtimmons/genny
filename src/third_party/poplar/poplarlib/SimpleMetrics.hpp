@@ -17,6 +17,21 @@ namespace simplemetrics {
 using UPStubInterface = std::unique_ptr<poplar::PoplarEventCollector::StubInterface>;
 using UPStreamInterface = std::unique_ptr<grpc::ClientWriterInterface<poplar::EventMetrics>>;
 
+class MockStream : public grpc::ClientWriterInterface<poplar::EventMetrics> {
+public:
+    grpc::Status Finish() override {
+        return grpc::Status();
+    }
+
+    bool Write(const poplar::EventMetrics &msg, ::grpc::WriteOptions options) override {
+        return true;
+    }
+
+    bool WritesDone() override {
+        return true;
+    }
+};
+
 class MockStub : public poplar::PoplarEventCollector::StubInterface {
 public:
     grpc::Status CreateCollector(::grpc::ClientContext *context, const ::poplar::CreateOptions &request,
@@ -61,7 +76,7 @@ private:
 
     grpc::ClientWriterInterface<poplar::EventMetrics> *
     StreamEventsRaw(::grpc::ClientContext *context, ::poplar::PoplarResponse *response) override {
-        return nullptr;
+        return new MockStream();
     }
 
     grpc::ClientAsyncWriterInterface<poplar::EventMetrics> *
