@@ -4,7 +4,7 @@ import unittest
 
 from unittest.mock import patch, mock_open
 from unittest.mock import Mock
-from gennylib.genny_auto_tasks import construct_all_tasks_json
+from gennylib.genny_auto_tasks import V1, all_tasks
 from gennylib.genny_auto_tasks import construct_variant_json
 from gennylib.genny_auto_tasks import modified_workload_files
 from gennylib.genny_auto_tasks import validate_user_workloads
@@ -81,7 +81,8 @@ class AutoTasksTest(unittest.TestCase):
             "timeout": 64800,
         }
 
-        actual_json_str = construct_all_tasks_json()
+        tasks = all_tasks()
+        actual_json_str = V1().construct_all_tasks_json(tasks)
         actual_json = json.loads(actual_json_str)
 
         self.assertDictEqual(expected_json, actual_json)
@@ -138,7 +139,8 @@ class AutoTasksTest(unittest.TestCase):
             "timeout": 64800,
         }
 
-        actual_json_str = construct_all_tasks_json()
+        tasks = all_tasks()
+        actual_json_str = V1().construct_all_tasks_json(tasks)
         actual_json = json.loads(actual_json_str)
 
         self.assertDictEqual(expected_json, actual_json)

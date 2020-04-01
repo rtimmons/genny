@@ -257,17 +257,6 @@ def get_prepare_environment_vars(task_name, fname):
     return prepare_environment_vars
 
 
-def _task_spec_v1(configuration: Configuration, prep_var):
-    t = configuration.task(prep_var["test"])
-    t.priority(5)  # The default priority in system_perf.yml
-    t.commands(
-        [
-            CommandDefinition().function("prepare environment").vars(prep_var),
-            CommandDefinition().function("deploy cluster"),
-            CommandDefinition().function("run test"),
-            CommandDefinition().function("analyze"),
-        ]
-    )
 
 
 # TODO: wip
@@ -284,19 +273,31 @@ def _task_spec_v1(configuration: Configuration, prep_var):
 #
 
 
-def construct_all_tasks_json():
-    """
-    :return: json representation of tasks for all workloads in the /src/workloads directory relative to the genny root.
-    """
-    c = Configuration()
-    c.exec_timeout(64800)  # 18 hours
-    prep_vars = _all_tasks(c)
-    for prep_var in prep_vars:
-        _task_spec_v1(c, prep_var)
-    return c.to_json()
+class V1:
+    def construct_all_tasks_json(self, prep_vars):
+        """
+        :return: json representation of tasks for all workloads in the /src/workloads directory relative to the genny root.
+        """
+        c = Configuration()
+        c.exec_timeout(64800)  # 18 hours
+        for prep_var in prep_vars:
+            self.propagate(c, prep_var)
+        return c.to_json()
+
+    def propagate(self, configuration: Configuration, prep_var):
+        t = configuration.task(prep_var["test"])
+        t.priority(5)  # The default priority in system_perf.yml
+        t.commands(
+            [
+                CommandDefinition().function("prepare environment").vars(prep_var),
+                CommandDefinition().function("deploy cluster"),
+                CommandDefinition().function("run test"),
+                CommandDefinition().function("analyze"),
+            ]
+        )
 
 
-def _all_tasks(c):
+def all_tasks():
     workload_dir = "{}/src/workloads".format(get_project_root())
     all_workloads = glob.glob("{}/**/*.yml".format(workload_dir), recursive=True)
     all_workloads = [s.split("/src/workloads/")[1] for s in all_workloads]
@@ -401,7 +402,9 @@ def main():
     cd_genny_root()
 
     if args.generate_all_tasks:
-        output_json = construct_all_tasks_json()
+        v1 = V1()
+        tasks = all_tasks()
+        output_json = v1.construct_all_tasks_json(tasks)
     else:
         if args.autorun:
             env_dict = make_env_dict(original_cwd)
