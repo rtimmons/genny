@@ -145,28 +145,48 @@ def get_project_root():
     return out.decode().strip()
 
 
-def modified_workload_files():
-    """
-    Returns a list of filenames for workloads that have been modified according to git, relative to origin/master.
-    :return: a list of filenames in the format subdirectory/Task.yml
-    """
-    try:
-        # Returns the names of files in src/workloads/ that have been added/modified/renamed since the common ancestor of HEAD and origin/master
-        out = subprocess.check_output(
-            "git diff --name-only --diff-filter=AMR $(git merge-base HEAD origin/master) -- src/workloads/",
-            shell=True,
-        )
-    except subprocess.CalledProcessError as e:
-        print(e.output, file=sys.stderr)
-        raise e
+class WorkloadFinder:
+    def modified_workload_files(self):
+        """
+        Returns a list of filenames for workloads that have been modified according to git, relative to origin/master.
+        :return: a list of filenames in the format subdirectory/Task.yml
+        """
+        try:
+            # Returns the names of files in src/workloads/ that have been added/modified/renamed since the common ancestor of HEAD and origin/master
+            out = subprocess.check_output(
+                "git diff --name-only --diff-filter=AMR $(git merge-base HEAD origin/master) -- src/workloads/",
+                shell=True,
+            )
+        except subprocess.CalledProcessError as e:
+            print(e.output, file=sys.stderr)
+            raise e
 
-    if out.decode() == "":
-        return []
+        if out.decode() == "":
+            return []
 
-    # Make paths relative to workloads/ e.g. src/workloads/scale/NewTask.yml --> scale/NewTask.yml
-    short_filenames = [f.split("workloads/", 1)[1] for f in out.decode().strip().split("\n")]
-    short_filenames = list(filter(lambda x: x.endswith(".yml"), short_filenames))
-    return short_filenames
+        # Make paths relative to workloads/ e.g. src/workloads/scale/NewTask.yml --> scale/NewTask.yml
+        short_filenames = [f.split("workloads/", 1)[1] for f in out.decode().strip().split("\n")]
+        short_filenames = list(filter(lambda x: x.endswith(".yml"), short_filenames))
+        return short_filenames
+
+    def autorun_workload_files(self, env_dict):
+        """
+        :param dict env_dict: a dict representing the values from bootstrap.yml and runtime.yml -- the output of make_env_dict().
+        :return: a list of workload files whose AutoRun critera are met by the env_dict.
+        """
+        workload_dir = "{}/src/workloads".format(get_project_root())
+        candidates = glob.glob("{}/**/*.yml".format(workload_dir), recursive=True)
+
+        matching_files = []
+        for fname in candidates:
+            with open(fname, "r") as handle:
+                workload_dict = yaml.safe_load(handle)
+
+                autorun_spec = AutoRunSpec.create_from_workload_yaml(workload_dict)
+                if autorun_spec.should_autorun(env_dict):
+                    matching_files.append(fname.split("/src/workloads/")[1])
+
+        return matching_files
 
 
 def _simplified_env_dict(env_dict: dict) -> dict:
@@ -174,27 +194,6 @@ def _simplified_env_dict(env_dict: dict) -> dict:
     for value in env_dict.values():
         out.update(value)
     return out
-
-
-def autorun_workload_files(env_dict):
-    """
-    :param dict env_dict: a dict representing the values from bootstrap.yml and runtime.yml -- the output of make_env_dict().
-    :return: a list of workload files whose AutoRun critera are met by the env_dict.
-    """
-    workload_dir = "{}/src/workloads".format(get_project_root())
-    candidates = glob.glob("{}/**/*.yml".format(workload_dir), recursive=True)
-
-    matching_files = []
-    for fname in candidates:
-        with open(fname, "r") as handle:
-            workload_dict = yaml.safe_load(handle)
-
-            autorun_spec = AutoRunSpec.create_from_workload_yaml(workload_dict)
-            if autorun_spec.should_autorun(env_dict):
-                matching_files.append(fname.split("/src/workloads/")[1])
-
-    return matching_files
-
 
 def make_env_dict(dirname):
     """
@@ -422,11 +421,13 @@ def main():
                 print(os.getcwd(), file=sys.stderr)
                 return
 
-            workloads = autorun_workload_files(env_dict)
+            finder = WorkloadFinder()
+            workloads = finder.autorun_workload_files(env_dict)
             if len(workloads) == 0:
                 print("No AutoRun workloads found matching environment, generating no tasks.")
         elif args.modified:
-            workloads = modified_workload_files()
+            finder = WorkloadFinder()
+            workloads = finder.modified_workload_files()
             if len(workloads) == 0 and args.forced_workloads is None:
                 raise Exception(
                     "No modified workloads found.\n\

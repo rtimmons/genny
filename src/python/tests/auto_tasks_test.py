@@ -4,9 +4,8 @@ import unittest
 
 from unittest.mock import patch, mock_open
 from unittest.mock import Mock
-from gennylib.genny_auto_tasks import V1, all_tasks
+from gennylib.genny_auto_tasks import V1, all_tasks, WorkloadFinder
 from gennylib.genny_auto_tasks import construct_variant_json
-from gennylib.genny_auto_tasks import modified_workload_files
 from gennylib.genny_auto_tasks import validate_user_workloads
 from gennylib.genny_auto_tasks import AutoRunSpec
 from tests.fixtures.auto_tasks_fixtures import workload_should_autorun_cases
@@ -147,7 +146,7 @@ class AutoTasksTest(unittest.TestCase):
 
     @patch("gennylib.genny_auto_tasks.open", new_callable=mock_open, read_data="")
     @patch("glob.glob")
-    @patch("gennylib.genny_auto_tasks.modified_workload_files")
+    @patch("gennylib.genny_auto_tasks.WorkloadFinder.modified_workload_files")
     def test_construct_variant_json(self, mock_glob, mock_modified_workload_files, mock_open):
         """
         This test runs construct_variant_json with static workloads and variants
@@ -178,7 +177,7 @@ class AutoTasksTest(unittest.TestCase):
     @patch("gennylib.genny_auto_tasks.open", new_callable=mock_open, read_data="")
     @patch("glob.glob")
     @patch("yaml.safe_load")
-    @patch("gennylib.genny_auto_tasks.modified_workload_files")
+    @patch("gennylib.genny_auto_tasks.WorkloadFinder.modified_workload_files")
     def test_construct_variant_json_multiple_setups(
         self, mock_glob, mock_safe_load, mock_modified_workload_files, mock_open
     ):
@@ -242,13 +241,15 @@ class AutoTasksTest(unittest.TestCase):
         for tc in cases:
             mock_check_output.return_value = tc[0]
             expected_files = tc[1]
-            actual_files = modified_workload_files()
+            finder = WorkloadFinder()
+            actual_files = finder.modified_workload_files()
             self.assertEqual(expected_files, actual_files)
 
         # Check that we handle errors from subprocess.check_output properly.
         mock_check_output.side_effect = CalledProcessError(127, "cmd")
         with self.assertRaises(CalledProcessError) as cm:
-            modified_workload_files()
+            finder = WorkloadFinder()
+            finder.modified_workload_files()
 
     def test_validate_user_workloads(self):
         cases = [
