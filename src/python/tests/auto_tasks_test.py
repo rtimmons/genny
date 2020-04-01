@@ -4,7 +4,7 @@ import unittest
 
 from unittest.mock import patch, mock_open
 from unittest.mock import Mock
-from gennylib.genny_auto_tasks import V1, all_tasks, WorkloadFinder
+from gennylib.genny_auto_tasks import V1, all_tasks, WorkloadFinder, Environment
 from gennylib.genny_auto_tasks import construct_variant_json
 from gennylib.genny_auto_tasks import validate_user_workloads
 from gennylib.genny_auto_tasks import AutoRunSpec
@@ -272,7 +272,7 @@ class AutoTasksTest(unittest.TestCase):
     def test_workload_should_autorun(self):
         for tc in workload_should_autorun_cases:
             workload_yaml = tc[0]
-            env_dict = tc[1]
+            env_dict = Environment(tc[1])
             expected = tc[2]
 
             with self.subTest(tc):

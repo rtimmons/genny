@@ -9,7 +9,7 @@ import subprocess
 import yaml
 import glob
 
-from typing import Optional
+from typing import Optional, List
 
 from shrub.config import Configuration
 from shrub.command import CommandDefinition
@@ -88,22 +88,17 @@ class AutoRunSpec:
             prepare_environment_vars.append(curr)
         return prepare_environment_vars
 
-    def should_autorun(self, env_dict):
+    def should_autorun(self, env: 'Environment'):
         """
         Check if the given workload's AutoRun conditions are met by the current environment
-        :param dict env_dict: a dict representing the values from bootstrap.yml and runtime.yml
+        :param env: a dict representing the values from bootstrap.yml and runtime.yml
         :return: True if this workload should be autorun, else False.
         """
         if self.required_dict is None:
             return False
 
-        simplified = _simplified_env_dict(env_dict)
         for key, values in self.required_dict.items():
-            if not isinstance(values, list):
-                raise Exception(f"Must give a list for key {key}")
-            if key not in simplified:
-                return False
-            if not any([simplified[key] == value for value in values]):
+            if not env.has_key_val(key, values):
                 return False
 
         return True
@@ -189,30 +184,48 @@ class WorkloadFinder:
         return matching_files
 
 
-def _simplified_env_dict(env_dict: dict) -> dict:
-    out = {}
-    for value in env_dict.values():
-        out.update(value)
-    return out
 
-def make_env_dict(dirname):
-    """
-    :param str dir: the directory in which to look for bootstrap.yml and runtime.yml files.
-    :return: a dict representation of bootstrap.yml and runtime.yml in the cwd, with top level keys 'bootstrap' and 'runtime'
-    """
-    env_files = ["bootstrap.yml", "runtime.yml"]
-    env_dict = {}
-    for fname in env_files:
-        fname = os.path.join(dirname, fname)
-        if not os.path.isfile(fname):
-            return None
-        with open(fname, "r") as handle:
-            config = yaml.safe_load(handle)
-            if config is None:
-                return None
-            module = os.path.basename(fname).split(".yml")[0]
-            env_dict[module] = config
-    return env_dict
+class Environment:
+    @staticmethod
+    def _load_from_files(dirname):
+        """
+        :param str dirname: the directory in which to look for bootstrap.yml and runtime.yml files.
+        :return: a dict representation of bootstrap.yml and runtime.yml in the cwd, with top level keys 'bootstrap' and 'runtime'
+        """
+        env_files = ["bootstrap.yml", "runtime.yml"]
+        env_dict = {}
+        for fname in env_files:
+            fname = os.path.join(dirname, fname)
+            if not os.path.isfile(fname):
+                continue
+            with open(fname, "r") as handle:
+                config = yaml.safe_load(handle)
+                if config is None:
+                    continue
+                module = os.path.basename(fname).split(".yml")[0]
+                env_dict[module] = config
+        return env_dict
+
+    def __init__(self, dirname):
+        if isinstance(dirname, dict):
+            env_dict = dirname
+        else:
+            env_dict = Environment._load_from_files(dirname)
+        self.env_dict = Environment._simplified_env_dict(env_dict)
+
+    @staticmethod
+    def _simplified_env_dict(env_dict: dict) -> dict:
+        out = {}
+        for value in env_dict.values():
+            out.update(value)
+        return out
+
+    def has_key_val(self, key: str, values: List[str]) -> bool:
+        if not isinstance(values, list):
+            raise Exception(f"Must give a list for key {key}")
+        if key not in self.env_dict:
+            return False
+        return any([self.env_dict[key] == value for value in values])
 
 
 def validate_user_workloads(workloads):
