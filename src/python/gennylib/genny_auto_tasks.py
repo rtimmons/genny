@@ -271,17 +271,37 @@ def _task_spec_v1(configuration: Configuration, prep_var):
     )
 
 
+# TODO: wip
+# def _task_spec_v2(configuration: Configuration, prep_var):
+#     t = configuration.task(prep_var["test"])
+#     t.priority(5)  # The default priority in system_perf.yml
+#     t.commands(
+#         [
+#             CommandDefinition()
+#             .function("f_run_dsi_workload")
+#             .vars({"mongodb_setup": prep_var["setup"]})
+#         ]
+#     )
+#
+
+
 def construct_all_tasks_json():
     """
     :return: json representation of tasks for all workloads in the /src/workloads directory relative to the genny root.
     """
     c = Configuration()
     c.exec_timeout(64800)  # 18 hours
+    prep_vars = _all_tasks(c)
+    for prep_var in prep_vars:
+        _task_spec_v1(c, prep_var)
+    return c.to_json()
 
+
+def _all_tasks(c):
     workload_dir = "{}/src/workloads".format(get_project_root())
     all_workloads = glob.glob("{}/**/*.yml".format(workload_dir), recursive=True)
     all_workloads = [s.split("/src/workloads/")[1] for s in all_workloads]
-
+    prep_vars = []
     for fname in all_workloads:
         basename = os.path.basename(fname)
         base_parts = os.path.splitext(basename)
@@ -292,11 +312,9 @@ def construct_all_tasks_json():
         task_name = to_snake_case(base_parts[0])
 
         prepare_environment_vars = get_prepare_environment_vars(task_name, fname)
-
         for prep_var in prepare_environment_vars:
-            _task_spec_v1(c, prep_var)
-
-    return c.to_json()
+            prep_vars.append(prep_var)
+    return prep_vars
 
 
 def construct_variant_json(workloads, variants):
