@@ -258,6 +258,19 @@ def get_prepare_environment_vars(task_name, fname):
     return prepare_environment_vars
 
 
+def _task_spec_v1(configuration: Configuration, prep_var):
+    t = configuration.task(prep_var["test"])
+    t.priority(5)  # The default priority in system_perf.yml
+    t.commands(
+        [
+            CommandDefinition().function("prepare environment").vars(prep_var),
+            CommandDefinition().function("deploy cluster"),
+            CommandDefinition().function("run test"),
+            CommandDefinition().function("analyze"),
+        ]
+    )
+
+
 def construct_all_tasks_json():
     """
     :return: json representation of tasks for all workloads in the /src/workloads directory relative to the genny root.
@@ -281,16 +294,7 @@ def construct_all_tasks_json():
         prepare_environment_vars = get_prepare_environment_vars(task_name, fname)
 
         for prep_var in prepare_environment_vars:
-            t = c.task(prep_var["test"])
-            t.priority(5)  # The default priority in system_perf.yml
-            t.commands(
-                [
-                    CommandDefinition().function("prepare environment").vars(prep_var),
-                    CommandDefinition().function("deploy cluster"),
-                    CommandDefinition().function("run test"),
-                    CommandDefinition().function("analyze"),
-                ]
-            )
+            _task_spec_v1(c, prep_var)
 
     return c.to_json()
 
