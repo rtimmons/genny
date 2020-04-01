@@ -108,6 +108,7 @@ class AutoRunSpec:
 
         return True
 
+
 def to_snake_case(str):
     """
     Converts str to snake_case, useful for generating test id's
@@ -324,9 +325,16 @@ def construct_variant_json(workloads, variants):
     :return: json representation of variants running the given workloads, that can be provided to evergreen's generate.tasks command.
     Note: this function only generates variants, no tasks. It assumes that the tasks have already been generated (i.e. by calling generate.tasks with the result of construct_all_tasks_json()).
     """
-    task_specs = []
+    task_specs = workloads_for_variant(workloads)
     c = Configuration()
+    for v in variants:
+        c.variant(v).tasks([TaskSpec(spec) for spec in task_specs])
 
+    return c.to_json()
+
+
+def workloads_for_variant(workloads):
+    task_specs = []
     for fname in workloads:
         basename = os.path.basename(fname)
         base_parts = os.path.splitext(basename)
@@ -338,12 +346,9 @@ def construct_variant_json(workloads, variants):
 
         prepare_environment_vars = get_prepare_environment_vars(task_name, fname)
         for prep_var in prepare_environment_vars:
-            task_specs.append(TaskSpec(prep_var["test"]))
+            task_specs.append(prep_var["test"])
 
-    for v in variants:
-        c.variant(v).tasks(task_specs)
-
-    return c.to_json()
+    return task_specs
 
 
 def main():
