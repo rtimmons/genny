@@ -88,7 +88,7 @@ class AutoRunSpec:
             prepare_environment_vars.append(curr)
         return prepare_environment_vars
 
-    def should_autorun(self, env: 'Environment'):
+    def should_autorun(self, env: "Environment"):
         """
         Check if the given workload's AutoRun conditions are met by the current environment
         :param env: a dict representing the values from bootstrap.yml and runtime.yml
@@ -184,7 +184,6 @@ class WorkloadFinder:
         return matching_files
 
 
-
 class Environment:
     @staticmethod
     def _load_from_files(dirname):
@@ -268,8 +267,6 @@ def get_prepare_environment_vars(task_name, fname):
         prepare_environment_vars.append(prepare_environment_vars_template)
 
     return prepare_environment_vars
-
-
 
 
 # TODO: wip
