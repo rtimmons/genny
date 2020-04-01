@@ -164,7 +164,7 @@ class WorkloadFinder:
         short_filenames = list(filter(lambda x: x.endswith(".yml"), short_filenames))
         return short_filenames
 
-    def autorun_workload_files(self, env_dict):
+    def autorun_workload_files(self, env: 'Environment'):
         """
         :param dict env_dict: a dict representing the values from bootstrap.yml and runtime.yml -- the output of make_env_dict().
         :return: a list of workload files whose AutoRun critera are met by the env_dict.
@@ -178,7 +178,7 @@ class WorkloadFinder:
                 workload_dict = yaml.safe_load(handle)
 
                 autorun_spec = AutoRunSpec.create_from_workload_yaml(workload_dict)
-                if autorun_spec.should_autorun(env_dict):
+                if autorun_spec.should_autorun(env):
                     matching_files.append(fname.split("/src/workloads/")[1])
 
         return matching_files
@@ -421,18 +421,9 @@ def main():
         output_json = v1.construct_all_tasks_json(tasks)
     else:
         if args.autorun:
-            env_dict = make_env_dict(original_cwd)
-            if env_dict is None:
-                print(
-                    "fatal error: bootstrap.yml and runtime.yml files not found in current directory, cannot AutoRun workloads\n\
-                    note: --autorun is intended to be called from within Evergreen. If using genny locally, please run the workload directly.",
-                    file=sys.stderr,
-                )
-                print(os.getcwd(), file=sys.stderr)
-                return
-
+            env = Environment(original_cwd)
             finder = WorkloadFinder()
-            workloads = finder.autorun_workload_files(env_dict)
+            workloads = finder.autorun_workload_files(env)
             if len(workloads) == 0:
                 print("No AutoRun workloads found matching environment, generating no tasks.")
         elif args.modified:
