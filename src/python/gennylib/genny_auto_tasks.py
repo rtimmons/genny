@@ -9,6 +9,8 @@ import subprocess
 import yaml
 import glob
 
+from typing import Optional
+
 from shrub.config import Configuration
 from shrub.command import CommandDefinition
 from shrub.variant import TaskSpec
@@ -41,7 +43,7 @@ class AutoRunSpec:
             )
 
     @staticmethod
-    def create_from_workload_yaml(workload_yaml):
+    def create_from_workload_yaml(workload_yaml) -> Optional["AutoRunSpec"]:
         """
         :param dict workload_yaml: dict representation of the workload yaml file
         :return AutoRunSpec: if workload contains a valid AutoRun section: returns an AutoRunSpec containing the requirements for this yaml to be autorun. Else, returns None.
@@ -86,6 +88,25 @@ class AutoRunSpec:
             prepare_environment_vars.append(curr)
         return prepare_environment_vars
 
+    def should_autorun(self, env_dict):
+        """
+        Check if the given workload's AutoRun conditions are met by the current environment
+        :param dict env_dict: a dict representing the values from bootstrap.yml and runtime.yml
+        :return: True if this workload should be autorun, else False.
+        """
+        if self.required_dict is None:
+            return False
+
+        simplified = _simplified_env_dict(env_dict)
+        for key, values in self.required_dict.items():
+            if not isinstance(values, list):
+                raise Exception(f"Must give a list for key {key}")
+            if key not in simplified:
+                return False
+            if not any([simplified[key] == value for value in values]):
+                return False
+
+        return True
 
 def to_snake_case(str):
     """
@@ -154,28 +175,6 @@ def _simplified_env_dict(env_dict: dict) -> dict:
     return out
 
 
-def workload_should_autorun(autorun_spec, env_dict):
-    """
-    Check if the given workload's AutoRun conditions are met by the current environment
-    :param AutoRunSpec autorun_spec: the workload's requirements to be autorun.
-    :param dict env_dict: a dict representing the values from bootstrap.yml and runtime.yml
-    :return: True if this workload should be autorun, else False.
-    """
-    if autorun_spec is None or autorun_spec.required_dict is None:
-        return False
-
-    simplified = _simplified_env_dict(env_dict)
-    for key, values in autorun_spec.required_dict.items():
-        if not isinstance(values, list):
-            raise Exception(f"Must give a list for key {key}")
-        if key not in simplified:
-            return False
-        if not any([simplified[key] == value for value in values]):
-            return False
-
-    return True
-
-
 def autorun_workload_files(env_dict):
     """
     :param dict env_dict: a dict representing the values from bootstrap.yml and runtime.yml -- the output of make_env_dict().
@@ -190,7 +189,7 @@ def autorun_workload_files(env_dict):
             workload_dict = yaml.safe_load(handle)
 
             autorun_spec = AutoRunSpec.create_from_workload_yaml(workload_dict)
-            if workload_should_autorun(autorun_spec, env_dict):
+            if autorun_spec.should_autorun(env_dict):
                 matching_files.append(fname.split("/src/workloads/")[1])
 
     return matching_files

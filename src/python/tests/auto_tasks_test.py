@@ -8,7 +8,6 @@ from gennylib.genny_auto_tasks import construct_all_tasks_json
 from gennylib.genny_auto_tasks import construct_variant_json
 from gennylib.genny_auto_tasks import modified_workload_files
 from gennylib.genny_auto_tasks import validate_user_workloads
-from gennylib.genny_auto_tasks import workload_should_autorun
 from gennylib.genny_auto_tasks import AutoRunSpec
 from tests.fixtures.auto_tasks_fixtures import workload_should_autorun_cases
 
@@ -275,5 +274,8 @@ class AutoTasksTest(unittest.TestCase):
 
             with self.subTest(tc):
                 autorun_spec = AutoRunSpec.create_from_workload_yaml(workload_yaml)
-                actual = workload_should_autorun(autorun_spec, env_dict)
-                self.assertEqual(expected, actual)
+                if not autorun_spec:
+                    self.assertEqual(False, expected)
+                else:
+                    actual = autorun_spec.should_autorun(env_dict)
+                    self.assertEqual(expected, actual)
