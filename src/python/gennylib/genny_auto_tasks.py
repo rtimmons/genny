@@ -164,7 +164,7 @@ class WorkloadFinder:
         short_filenames = list(filter(lambda x: x.endswith(".yml"), short_filenames))
         return short_filenames
 
-    def autorun_workload_files(self, env: 'Environment'):
+    def autorun_workload_files(self, env: "Environment"):
         """
         :param dict env_dict: a dict representing the values from bootstrap.yml and runtime.yml -- the output of make_env_dict().
         :return: a list of workload files whose AutoRun critera are met by the env_dict.
