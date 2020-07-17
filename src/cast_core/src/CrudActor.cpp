@@ -238,7 +238,6 @@ bsoncxx::document::value emptyDoc = bsoncxx::from_json("{}");
 // A large number of subclasses have
 // - metrics::Operation
 // - mongocxx::collection
-// - bool (_onSession)
 // it may make sense to add a CollectionAwareBaseOperation
 // or something intermediate class to eliminate some
 // duplication.
@@ -265,12 +264,11 @@ struct BaseOperation {
         ctx.success();
     }
 
-    virtual void run(mongocxx::client_session& session) = 0;
+    virtual void run() = 0;
     virtual ~BaseOperation() = default;
 };
 
 using OpCallback = std::function<std::unique_ptr<BaseOperation>(const Node&,
-                                                                bool,
                                                                 mongocxx::collection,
                                                                 metrics::Operation,
                                                                 PhaseContext& context,
@@ -283,7 +281,7 @@ struct WriteOperation : public BaseOperation {
 };
 
 using WriteOpCallback = std::function<std::unique_ptr<WriteOperation>(
-    const Node&, bool, mongocxx::collection, metrics::Operation, PhaseContext&, ActorId)>;
+    const Node&, mongocxx::collection, metrics::Operation, PhaseContext&, ActorId)>;
 
 // Not technically "crud" but it was easy to add and made
 // a few of the tests easier to write (by allowing inserts
@@ -295,10 +293,7 @@ struct CreateIndexOperation : public BaseOperation {
     DocumentGenerator _indexOptions;
     mongocxx::options::index_view _operationOptions;
 
-    bool _onSession;
-
     CreateIndexOperation(const Node& opNode,
-                         bool onSession,
                          mongocxx::collection collection,
                          metrics::Operation operation,
                          PhaseContext& context,
@@ -306,20 +301,17 @@ struct CreateIndexOperation : public BaseOperation {
         : BaseOperation(context, opNode),
           _collection(std::move(collection)),
           _operation{operation},
-          _onSession{onSession},
           _keys{opNode["Keys"].to<DocumentGenerator>(context, id)},
           _indexOptions{opNode["IndexOptions"].to<DocumentGenerator>(context, id)} {}
 
 
-    void run(mongocxx::client_session& session) override {
+    void run() override {
         auto keys = _keys();
         auto indexOptions = _indexOptions();
 
         this->doBlock(_operation, [&](metrics::OperationContext& ctx) {
-            _onSession
-                ? _collection.create_index(keys.view(), indexOptions.view(), _operationOptions)
-                : _collection.create_index(
-                      session, keys.view(), indexOptions.view(), _operationOptions);
+                _collection.create_index(
+                      keys.view(), indexOptions.view(), _operationOptions);
             return std::make_optional(std::move(keys));
         });
     }
@@ -327,13 +319,11 @@ struct CreateIndexOperation : public BaseOperation {
 
 struct InsertOneOperation : public WriteOperation {
     InsertOneOperation(const Node& opNode,
-                       bool onSession,
                        mongocxx::collection collection,
                        metrics::Operation operation,
                        PhaseContext& context,
                        ActorId id)
         : WriteOperation(context, opNode),
-          _onSession{onSession},
           _collection{std::move(collection)},
           _operation{operation},
           _options{opNode["OperationOptions"].maybe<mongocxx::options::insert>().value_or(
@@ -345,13 +335,12 @@ struct InsertOneOperation : public WriteOperation {
         return mongocxx::model::insert_one{std::move(document)};
     }
 
-    void run(mongocxx::client_session& session) override {
+    void run() override {
         auto document = _document();
         auto size = document.view().length();
 
         this->doBlock(_operation, [&](metrics::OperationContext& ctx) {
-            (_onSession) ? _collection.insert_one(session, document.view(), _options)
-                         : _collection.insert_one(document.view(), _options);
+            _collection.insert_one(document.view(), _options);
             ctx.addDocuments(1);
             ctx.addBytes(size);
             return std::make_optional(std::move(document));
@@ -359,7 +348,6 @@ struct InsertOneOperation : public WriteOperation {
     }
 
 private:
-    bool _onSession;
     mongocxx::collection _collection;
     DocumentGenerator _document;
     metrics::Operation _operation;
@@ -369,13 +357,11 @@ private:
 
 struct UpdateOneOperation : public WriteOperation {
     UpdateOneOperation(const Node& opNode,
-                       bool onSession,
                        mongocxx::collection collection,
                        metrics::Operation operation,
                        PhaseContext& context,
                        ActorId id)
         : WriteOperation(context, opNode),
-          _onSession{onSession},
           _collection{std::move(collection)},
           _operation{operation},
           _filter{opNode["Filter"].to<DocumentGenerator>(context, id)},
@@ -387,13 +373,11 @@ struct UpdateOneOperation : public WriteOperation {
         return mongocxx::model::update_one{std::move(filter), std::move(update)};
     }
 
-    void run(mongocxx::client_session& session) override {
+    void run() override {
         auto filter = _filter();
         auto update = _update();
         this->doBlock(_operation, [&](metrics::OperationContext& ctx) {
-            auto result = (_onSession)
-                ? _collection.update_one(session, filter.view(), update.view(), _options)
-                : _collection.update_one(filter.view(), update.view(), _options);
+            auto result = _collection.update_one(filter.view(), update.view(), _options);
             if (result) {
                 ctx.addDocuments(result->modified_count());
             }
@@ -403,7 +387,6 @@ struct UpdateOneOperation : public WriteOperation {
     }
 
 private:
-    bool _onSession;
     mongocxx::collection _collection;
     DocumentGenerator _filter;
     DocumentGenerator _update;
@@ -413,13 +396,11 @@ private:
 
 struct UpdateManyOperation : public WriteOperation {
     UpdateManyOperation(const Node& opNode,
-                        bool onSession,
                         mongocxx::collection collection,
                         metrics::Operation operation,
                         PhaseContext& context,
                         ActorId id)
         : WriteOperation(context, opNode),
-          _onSession{onSession},
           _collection{std::move(collection)},
           _operation{operation},
           _filter{opNode["Filter"].to<DocumentGenerator>(context, id)},
@@ -431,14 +412,12 @@ struct UpdateManyOperation : public WriteOperation {
         return mongocxx::model::update_many{std::move(filter), std::move(update)};
     }
 
-    void run(mongocxx::client_session& session) override {
+    void run() override {
         auto filter = _filter();
         auto update = _update();
 
         this->doBlock(_operation, [&](metrics::OperationContext& ctx) {
-            auto result = (_onSession)
-                ? _collection.update_many(session, filter.view(), update.view(), _options)
-                : _collection.update_many(filter.view(), update.view(), _options);
+            auto result = _collection.update_many(filter.view(), update.view(), _options);
             if (result) {
                 ctx.addDocuments(result->modified_count());
             }
@@ -447,7 +426,6 @@ struct UpdateManyOperation : public WriteOperation {
     }
 
 private:
-    bool _onSession;
     mongocxx::collection _collection;
     DocumentGenerator _filter;
     DocumentGenerator _update;
@@ -457,13 +435,11 @@ private:
 
 struct DeleteOneOperation : public WriteOperation {
     DeleteOneOperation(const Node& opNode,
-                       bool onSession,
                        mongocxx::collection collection,
                        metrics::Operation operation,
                        PhaseContext& context,
                        ActorId id)
         : WriteOperation(context, opNode),
-          _onSession{onSession},
           _collection{std::move(collection)},
           _operation{operation},
           _filter(opNode["Filter"].to<DocumentGenerator>(context, id)) {}
@@ -473,11 +449,10 @@ struct DeleteOneOperation : public WriteOperation {
         return mongocxx::model::delete_one{std::move(filter)};
     }
 
-    void run(mongocxx::client_session& session) override {
+    void run() override {
         auto filter = _filter();
         this->doBlock(_operation, [&](metrics::OperationContext& ctx) {
-            auto result = (_onSession) ? _collection.delete_one(session, filter.view(), _options)
-                                       : _collection.delete_one(filter.view(), _options);
+            auto result = _collection.delete_one(filter.view(), _options);
             if (result) {
                 ctx.addDocuments(result->deleted_count());
             }
@@ -486,7 +461,6 @@ struct DeleteOneOperation : public WriteOperation {
     }
 
 private:
-    bool _onSession;
     mongocxx::collection _collection;
     DocumentGenerator _filter;
     metrics::Operation _operation;
@@ -495,13 +469,11 @@ private:
 
 struct DeleteManyOperation : public WriteOperation {
     DeleteManyOperation(const Node& opNode,
-                        bool onSession,
                         mongocxx::collection collection,
                         metrics::Operation operation,
                         PhaseContext& context,
                         ActorId id)
         : WriteOperation(context, opNode),
-          _onSession{onSession},
           _collection{std::move(collection)},
           _operation{operation},
           _filter{opNode["Filter"].to<DocumentGenerator>(context, id)} {}
@@ -511,11 +483,10 @@ struct DeleteManyOperation : public WriteOperation {
         return mongocxx::model::delete_many{std::move(filter)};
     }
 
-    void run(mongocxx::client_session& session) override {
+    void run() override {
         auto filter = _filter();
         this->doBlock(_operation, [&](metrics::OperationContext& ctx) {
-            auto results = (_onSession) ? _collection.delete_many(session, filter.view(), _options)
-                                        : _collection.delete_many(filter.view(), _options);
+            auto results = _collection.delete_many(filter.view(), _options);
             if (results) {
                 ctx.addDocuments(results->deleted_count());
             }
@@ -524,7 +495,6 @@ struct DeleteManyOperation : public WriteOperation {
     }
 
 private:
-    bool _onSession;
     mongocxx::collection _collection;
     DocumentGenerator _filter;
     metrics::Operation _operation;
@@ -533,13 +503,11 @@ private:
 
 struct ReplaceOneOperation : public WriteOperation {
     ReplaceOneOperation(const Node& opNode,
-                        bool onSession,
                         mongocxx::collection collection,
                         metrics::Operation operation,
                         PhaseContext& context,
                         ActorId id)
         : WriteOperation(context, opNode),
-          _onSession{onSession},
           _collection{std::move(collection)},
           _operation{operation},
           _filter{opNode["Filter"].to<DocumentGenerator>(context, id)},
@@ -551,15 +519,13 @@ struct ReplaceOneOperation : public WriteOperation {
         return mongocxx::model::replace_one{std::move(filter), std::move(replacement)};
     }
 
-    void run(mongocxx::client_session& session) override {
+    void run() override {
         auto filter = _filter();
         auto replacement = _replacement();
         auto size = replacement.view().length();
 
         this->doBlock(_operation, [&](metrics::OperationContext& ctx) {
-            auto result = (_onSession)
-                ? _collection.replace_one(session, filter.view(), replacement.view(), _options)
-                : _collection.replace_one(filter.view(), replacement.view(), _options);
+            auto result = _collection.replace_one(filter.view(), replacement.view(), _options);
 
             if (result) {
                 ctx.addDocuments(result->modified_count());
@@ -571,7 +537,6 @@ struct ReplaceOneOperation : public WriteOperation {
     }
 
 private:
-    bool _onSession;
     mongocxx::collection _collection;
     DocumentGenerator _filter;
     DocumentGenerator _replacement;
@@ -581,12 +546,11 @@ private:
 
 template <class P, class C, class O>
 C baseCallback = [](const Node& opNode,
-                    bool onSession,
                     mongocxx::collection collection,
                     metrics::Operation operation,
                     PhaseContext& context,
                     ActorId id) -> std::unique_ptr<P> {
-    return std::make_unique<O>(opNode, onSession, collection, operation, context, id);
+    return std::make_unique<O>(opNode, collection, operation, context, id);
 };
 
 // Maps the WriteCommand name to the constructor of the designated Operation struct.
@@ -614,18 +578,15 @@ std::unordered_map<std::string, WriteOpCallback&> bulkWriteConstructors = {
  *          WriteConcern:
  *            Level: majority
  *            Journal: true
- *        OnSession: false
  */
 struct BulkWriteOperation : public BaseOperation {
 
     BulkWriteOperation(const Node& opNode,
-                       bool onSession,
                        mongocxx::collection collection,
                        metrics::Operation operation,
                        PhaseContext& context,
                        ActorId id)
         : BaseOperation(context, opNode),
-          _onSession{onSession},
           _collection{std::move(collection)},
           _operation{operation} {
         auto& writeOpsYaml = opNode["WriteOperations"];
@@ -650,12 +611,11 @@ struct BulkWriteOperation : public BaseOperation {
         }
         auto createWriteOp = writeOpConstructor->second;
         _writeOps.push_back(
-            createWriteOp(writeOp, _onSession, _collection, _operation, context, id));
+            createWriteOp(writeOp, _collection, _operation, context, id));
     }
 
-    void run(mongocxx::client_session& session) override {
-        auto bulk = (_onSession) ? _collection.create_bulk_write(session, _options)
-                                 : _collection.create_bulk_write(_options);
+    void run() override {
+        auto bulk = _collection.create_bulk_write(_options);
         for (auto&& op : _writeOps) {
             auto writeModel = op->getModel();
             bulk.append(writeModel);
@@ -679,7 +639,6 @@ struct BulkWriteOperation : public BaseOperation {
 
 private:
     std::vector<std::unique_ptr<WriteOperation>> _writeOps;
-    bool _onSession;
     mongocxx::collection _collection;
     mongocxx::options::bulk_write _options;
     metrics::Operation _operation;
@@ -693,17 +652,14 @@ private:
  *        Filter: { a : 1 }
  *        Options:
  *          Limit: 5
- *        OnSession: false
  */
 struct CountDocumentsOperation : public BaseOperation {
     CountDocumentsOperation(const Node& opNode,
-                            bool onSession,
                             mongocxx::collection collection,
                             metrics::Operation operation,
                             PhaseContext& context,
                             ActorId id)
         : BaseOperation(context, opNode),
-          _onSession{onSession},
           _collection{std::move(collection)},
           _operation{operation},
           _filter{opNode["Filter"].to<DocumentGenerator>(context, id)} {
@@ -712,13 +668,12 @@ struct CountDocumentsOperation : public BaseOperation {
         }
     }
 
-    void run(mongocxx::client_session& session) override {
+    void run() override {
         auto filter = _filter();
 
         this->doBlock(_operation, [&](metrics::OperationContext& ctx) {
-            auto count = (_onSession)
-                ? _collection.count_documents(session, filter.view(), _options)
-                : _collection.count_documents(filter.view(), _options);
+            auto count =
+                _collection.count_documents(filter.view(), _options);
             ctx.addDocuments(count);
             return std::make_optional(std::move(filter));
         });
@@ -726,7 +681,6 @@ struct CountDocumentsOperation : public BaseOperation {
 
 
 private:
-    bool _onSession;
     mongocxx::collection _collection;
     mongocxx::options::count _options;
     DocumentGenerator _filter;
@@ -735,31 +689,19 @@ private:
 
 struct EstimatedDocumentCountOperation : public BaseOperation {
     EstimatedDocumentCountOperation(const Node& opNode,
-                                    bool onSession,
                                     mongocxx::collection collection,
                                     metrics::Operation operation,
                                     PhaseContext& context,
                                     ActorId id)
         : BaseOperation(context, opNode),
-          _onSession{onSession},
           _collection{std::move(collection)},
           _operation{operation} {
         if (opNode["Options"]) {
             _options = opNode["Options"].to<mongocxx::options::estimated_document_count>();
         }
-        if (onSession) {
-            // Technically the docs don't explicitly mention this but the C++ driver doesn't
-            // let you specify a session. In fact count operations operations don't work inside
-            // a transaction so maybe CountOperation should fail in the same way if _onSession
-            // is set?
-            //
-            // https://docs.mongodb.com/manual/reference/method/db.collection.estimatedDocumentCount/
-            BOOST_THROW_EXCEPTION(
-                InvalidConfigurationException("Cannot run EstimatedDocumentCount on a session"));
-        }
     }
 
-    void run(mongocxx::client_session& session) override {
+    void run() override {
         this->doBlock(_operation, [&](metrics::OperationContext& ctx) {
             auto count = _collection.estimated_document_count(_options);
             ctx.addDocuments(count);
@@ -769,7 +711,6 @@ struct EstimatedDocumentCountOperation : public BaseOperation {
 
 
 private:
-    bool _onSession;
     mongocxx::collection _collection;
     mongocxx::options::estimated_document_count _options;
     metrics::Operation _operation;
@@ -777,22 +718,19 @@ private:
 
 struct FindOperation : public BaseOperation {
     FindOperation(const Node& opNode,
-                  bool onSession,
                   mongocxx::collection collection,
                   metrics::Operation operation,
                   PhaseContext& context,
                   ActorId id)
         : BaseOperation(context, opNode),
-          _onSession{onSession},
           _collection{std::move(collection)},
           _operation{operation},
           _filter{opNode["Filter"].to<DocumentGenerator>(context, id)} {}
 
-    void run(mongocxx::client_session& session) override {
+    void run() override {
         auto filter = _filter();
         this->doBlock(_operation, [&](metrics::OperationContext& ctx) {
-            auto cursor = (_onSession) ? _collection.find(session, filter.view(), _options)
-                                       : _collection.find(filter.view(), _options);
+            auto cursor =_collection.find(filter.view(), _options);
             for (auto&& doc : cursor) {
                 ctx.addDocuments(1);
                 ctx.addBytes(doc.length());
@@ -803,7 +741,6 @@ struct FindOperation : public BaseOperation {
 
 
 private:
-    bool _onSession;
     mongocxx::collection _collection;
     mongocxx::options::find _options;
     DocumentGenerator _filter;
@@ -812,25 +749,22 @@ private:
 
 struct FindOneAndUpdateOperation : public BaseOperation {
     FindOneAndUpdateOperation(const Node& opNode,
-                              bool onSession,
                               mongocxx::collection collection,
                               metrics::Operation operation,
                               PhaseContext& context,
                               ActorId id)
         : BaseOperation(context, opNode),
-          _onSession{onSession},
           _collection{std::move(collection)},
           _operation{operation},
           _filter{opNode["Filter"].to<DocumentGenerator>(context, id)},
           _update{opNode["Update"].to<DocumentGenerator>(context, id)} {}
 
-    void run(mongocxx::client_session& session) override {
+    void run() override {
         auto filter = _filter();
         auto update = _update();
         this->doBlock(_operation, [&](metrics::OperationContext& ctx) {
-            auto result = (_onSession)
-                ? _collection.find_one_and_update(session, filter.view(), update.view(), _options)
-                : _collection.find_one_and_update(filter.view(), update.view(), _options);
+            auto result =
+                _collection.find_one_and_update(filter.view(), update.view(), _options);
             if (result) {
                 ctx.addDocuments(1);
                 ctx.addBytes(result->view().length());
@@ -840,7 +774,6 @@ struct FindOneAndUpdateOperation : public BaseOperation {
     }
 
 private:
-    bool _onSession;
     mongocxx::collection _collection;
     mongocxx::options::find_one_and_update _options;
     DocumentGenerator _filter;
@@ -850,23 +783,19 @@ private:
 
 struct FindOneAndDeleteOperation : public BaseOperation {
     FindOneAndDeleteOperation(const Node& opNode,
-                              bool onSession,
                               mongocxx::collection collection,
                               metrics::Operation operation,
                               PhaseContext& context,
                               ActorId id)
         : BaseOperation(context, opNode),
-          _onSession{onSession},
           _collection{std::move(collection)},
           _operation{operation},
           _filter{opNode["Filter"].to<DocumentGenerator>(context, id)} {}
 
-    void run(mongocxx::client_session& session) override {
+    void run() override {
         auto filter = _filter();
         this->doBlock(_operation, [&](metrics::OperationContext& ctx) {
-            auto result = (_onSession)
-                ? _collection.find_one_and_delete(session, filter.view(), _options)
-                : _collection.find_one_and_delete(filter.view(), _options);
+            auto result = _collection.find_one_and_delete(filter.view(), _options);
             if (result) {
                 ctx.addDocuments(1);
                 ctx.addBytes(result->view().length());
@@ -876,7 +805,6 @@ struct FindOneAndDeleteOperation : public BaseOperation {
     }
 
 private:
-    bool _onSession;
     mongocxx::collection _collection;
     mongocxx::options::find_one_and_delete _options;
     DocumentGenerator _filter;
@@ -885,26 +813,21 @@ private:
 
 struct FindOneAndReplaceOperation : public BaseOperation {
     FindOneAndReplaceOperation(const Node& opNode,
-                               bool onSession,
                                mongocxx::collection collection,
                                metrics::Operation operation,
                                PhaseContext& context,
                                ActorId id)
         : BaseOperation(context, opNode),
-          _onSession{onSession},
           _collection{std::move(collection)},
           _operation{operation},
           _filter{opNode["Filter"].to<DocumentGenerator>(context, id)},
           _replacement{opNode["Replacement"].to<DocumentGenerator>(context, id)} {}
 
-    void run(mongocxx::client_session& session) override {
+    void run() override {
         auto filter = _filter();
         auto replacement = _replacement();
         this->doBlock(_operation, [&](metrics::OperationContext& ctx) {
-            auto result = (_onSession)
-                ? _collection.find_one_and_replace(
-                      session, filter.view(), replacement.view(), _options)
-                : _collection.find_one_and_replace(filter.view(), replacement.view(), _options);
+            auto result =_collection.find_one_and_replace(filter.view(), replacement.view(), _options);
             if (result) {
                 ctx.addDocuments(1);
                 ctx.addBytes(result->view().length());
@@ -914,7 +837,6 @@ struct FindOneAndReplaceOperation : public BaseOperation {
     }
 
 private:
-    bool _onSession;
     mongocxx::collection _collection;
     mongocxx::options::find_one_and_replace _options;
     DocumentGenerator _filter;
@@ -934,13 +856,11 @@ private:
 struct InsertManyOperation : public BaseOperation {
 
     InsertManyOperation(const Node& opNode,
-                        bool onSession,
                         mongocxx::collection collection,
                         metrics::Operation operation,
                         PhaseContext& context,
                         ActorId id)
         : BaseOperation(context, opNode),
-          _onSession{onSession},
           _collection{std::move(collection)},
           _operation{operation} {
         auto& documents = opNode["Documents"];
@@ -953,7 +873,7 @@ struct InsertManyOperation : public BaseOperation {
         }
     }
 
-    void run(mongocxx::client_session& session) override {
+    void run() override {
         std::vector<bsoncxx::document::view_or_value> writeOps;
         size_t bytes = 0;
         for (auto&& docExpr : _docExprs) {
@@ -963,8 +883,7 @@ struct InsertManyOperation : public BaseOperation {
         }
 
         this->doBlock(_operation, [&](metrics::OperationContext& ctx) {
-            auto result = (_onSession) ? _collection.insert_many(session, writeOps, _options)
-                                       : _collection.insert_many(writeOps, _options);
+            auto result = _collection.insert_many(writeOps, _options);
 
             ctx.addBytes(bytes);
             if (result) {
@@ -976,7 +895,6 @@ struct InsertManyOperation : public BaseOperation {
 
 private:
     mongocxx::collection _collection;
-    const bool _onSession;
     mongocxx::options::insert _options;
     metrics::Operation _operation;
     std::vector<DocumentGenerator> _docExprs;
@@ -998,61 +916,6 @@ private:
  *            MaxStalenessSeconds: 1000
  */
 
-struct StartTransactionOperation : public BaseOperation {
-
-    StartTransactionOperation(const Node& opNode,
-                              bool onSession,
-                              mongocxx::collection collection,
-                              metrics::Operation operation,
-                              PhaseContext& context,
-                              ActorId id)
-        : BaseOperation(context, opNode), _operation{operation} {
-        if (!opNode.isMap())
-            return;
-        if (opNode["Options"]) {
-            _options = opNode["Options"].to<mongocxx::options::transaction>();
-        }
-    }
-
-    void run(mongocxx::client_session& session) override {
-        this->doBlock(_operation, [&](metrics::OperationContext& ctx) {
-            session.start_transaction(_options);
-            return std::nullopt;
-        });
-    }
-
-private:
-    mongocxx::options::transaction _options;
-    metrics::Operation _operation;
-};
-
-/**
- * Example usage:
- *    Operations:
- *    - OperationName: commitTransaction
- */
-
-struct CommitTransactionOperation : public BaseOperation {
-
-    CommitTransactionOperation(const Node& opNode,
-                               bool onSession,
-                               mongocxx::collection collection,
-                               metrics::Operation operation,
-                               PhaseContext& context,
-                               ActorId id)
-        : BaseOperation(context, opNode), _operation{operation} {}
-
-    void run(mongocxx::client_session& session) override {
-        this->doBlock(_operation, [&](metrics::OperationContext& ctx) {
-            session.commit_transaction();
-            return std::nullopt;
-        });
-    }
-
-private:
-    metrics::Operation _operation;
-};
-
 /**
  * Example usage:
  *    Operations:
@@ -1064,7 +927,6 @@ private:
 
 struct SetReadConcernOperation : public BaseOperation {
     SetReadConcernOperation(const Node& opNode,
-                            bool onSession,
                             mongocxx::collection collection,
                             metrics::Operation operation,
                             PhaseContext& context,
@@ -1075,7 +937,7 @@ struct SetReadConcernOperation : public BaseOperation {
         _readConcern = opNode["ReadConcern"].to<mongocxx::read_concern>();
     }
 
-    void run(mongocxx::client_session& session) override {
+    void run() override {
         this->doBlock(_operation, [&](metrics::OperationContext& ctx) {
             _collection.read_concern(_readConcern);
             return std::nullopt;
@@ -1093,20 +955,17 @@ private:
  *    Operations:
  *    - OperationName: drop
  *      OperationCommand:
- *        OnSession: false
  *        Options:
  *          WriteConcern:
  *            Level: majority
  */
 struct DropOperation : public BaseOperation {
     DropOperation(const Node& opNode,
-                  bool onSession,
                   mongocxx::collection collection,
                   metrics::Operation operation,
                   PhaseContext& context,
                   ActorId id)
         : BaseOperation(context, opNode),
-          _onSession{onSession},
           _collection{std::move(collection)},
           _operation{operation} {
         if (auto& c = opNode["Options"]["WriteConcern"]) {
@@ -1114,9 +973,9 @@ struct DropOperation : public BaseOperation {
         }
     }
 
-    void run(mongocxx::client_session& session) override {
+    void run() override {
         this->doBlock(_operation, [&](metrics::OperationContext& ctx) {
-            (_onSession) ? _collection.drop(session, _wc) : _collection.drop(_wc);
+            _collection.drop(_wc);
             // ideally return something indicating collection name
             return std::nullopt;
         });
@@ -1124,7 +983,6 @@ struct DropOperation : public BaseOperation {
 
 private:
     mongocxx::collection _collection;
-    const bool _onSession;
     metrics::Operation _operation;
     mongocxx::write_concern _wc;
 };
@@ -1141,8 +999,6 @@ std::unordered_map<std::string, OpCallback&> opConstructors = {
     {"findOneAndDelete", baseCallback<BaseOperation, OpCallback, FindOneAndDeleteOperation>},
     {"findOneAndReplace", baseCallback<BaseOperation, OpCallback, FindOneAndReplaceOperation>},
     {"insertMany", baseCallback<BaseOperation, OpCallback, InsertManyOperation>},
-    {"startTransaction", baseCallback<BaseOperation, OpCallback, StartTransactionOperation>},
-    {"commitTransaction", baseCallback<BaseOperation, OpCallback, CommitTransactionOperation>},
     {"setReadConcern", baseCallback<BaseOperation, OpCallback, SetReadConcernOperation>},
     {"drop", baseCallback<BaseOperation, OpCallback, DropOperation>},
     {"insertOne", baseCallback<BaseOperation, OpCallback, InsertOneOperation>},
@@ -1179,7 +1035,6 @@ struct CrudActor::PhaseConfig {
         auto addOperation = [&](const Node& node) -> std::unique_ptr<BaseOperation> {
             auto& yamlCommand = node["OperationCommand"];
             auto opName = node["OperationName"].to<std::string>();
-            auto onSession = yamlCommand["OnSession"].maybe<bool>().value_or(false);
 
             // Grab the appropriate Operation struct defined by 'OperationName'.
             auto op = opConstructors.find(opName);
@@ -1199,7 +1054,6 @@ struct CrudActor::PhaseConfig {
 
             auto createOperation = op->second;
             return createOperation(yamlCommand,
-                                   onSession,
                                    collection,
                                    perPhaseMetrics ? phaseContext.operation(opName, id)
                                                    : phaseContext.actor().operation(opName, id),
@@ -1217,9 +1071,8 @@ void CrudActor::run() {
         for (const auto&& _ : config) {
             auto metricsContext = config->metrics.start();
 
-            auto session = _client->start_session();
             for (auto&& op : config->operations) {
-                op->run(session);
+                op->run();
             }
 
             metricsContext.success();

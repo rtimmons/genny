@@ -69,7 +69,6 @@ namespace genny::actor {
  *           Ordered: true
  *           WriteConcern:
  *             Level: majority
- *         OnSession: true
  *     - OperationName: commitTransaction
  *   - Repeat: 1
  *     Collection: test
