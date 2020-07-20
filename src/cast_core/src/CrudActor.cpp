@@ -760,11 +760,10 @@ struct FindOneOperation : public BaseOperation {
           _operation{operation},
           _filter{opNode["Filter"].to<DocumentGenerator>(context, id)} {}
 
-    void run(mongocxx::client_session& session) override {
+    void run() override {
         auto filter = _filter();
         this->doBlock(_operation, [&](metrics::OperationContext& ctx) {
-            auto result = (_onSession) ? _collection.find_one(session, filter.view(), _options)
-                                       : _collection.find_one(filter.view(), _options);
+            auto result = _collection.find_one(filter.view(), _options);
             if (result) {
                 ctx.addDocuments(1);
                 ctx.addBytes(result->view().length());
