@@ -295,8 +295,8 @@ def do_parse(args):
     return metrics_file_names, my_csv2.approximate_test_run_time
 
 
-def is_ftdc(args):
-    return isdir(args.input_file)
+def is_ftdc(input_file):
+    return isdir(input_file)
 
 
 def get_ftdc_duration(args):
@@ -304,13 +304,12 @@ def get_ftdc_duration(args):
     return datetime.now() - datetime.fromtimestamp(os.path.getmtime(time_file))
 
 
-def run(args):
+def run_from_parsed():
     """
     Runs the conversion from genny metrics to cedar format.
     If the inputted file is a directory of FTDC data, we just
     return those.
 
-    :param args: parsed command line args.
     :return: list of cedar metrics file names and the approximate run time of the test
              computed using the machine's system_time.
 
@@ -318,7 +317,6 @@ def run(args):
     if is_ftdc(args):
         duration = get_ftdc_duration(args)
 
-        # We expect that, at poplar-send time, the directory of FTDC files is in the CWD.
         ftdc_dir = os.path.basename(os.path.normpath(args.input_file))
         metrics_file_names = []
         for filename in os.listdir(args.input_file):

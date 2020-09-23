@@ -12,13 +12,8 @@ from gennylib.parsers.csv2 import CSV2, IntermediateCSVColumns
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        description="Convert cedar-csv output into legacy perf.json" "report file format"
+        description="Convert cedar-csv output into legacy perf.json report file format"
     )
-    parser.add_argument(
-        "--report-file", default="perf.json", help="path to the perf.json report file"
-    )
-    parser.add_argument("input_file", metavar="input-file", help="path to genny csv2 perf data")
-
     return parser
 
 
@@ -65,15 +60,15 @@ def _translate_to_perf_json(timers):
     return {"results": out}
 
 
-def run(args):
+def run(input_csv_file, perf_json_file):
     timers = {}
 
     # There may not be a CSV file and DSI wouldn't
     # know without reading the workload yml.
-    if not os.path.exists(args.input_file):
+    if not os.path.exists(input_csv_file):
         return
 
-    my_csv2 = CSV2(args.input_file)
+    my_csv2 = CSV2(input_csv_file)
 
     iterations = 0
     with my_csv2.data_reader() as data_reader:
@@ -111,7 +106,8 @@ def run(args):
 
     result = _translate_to_perf_json(timers)
 
-    with open(args.report_file, "w") as f:
+    os.makedirs(os.path.dirname(perf_json_file), exist_ok=True)
+    with open(perf_json_file, "w") as f:
         json.dump(result, f)
 
 
@@ -124,4 +120,7 @@ def main__legacy_report(argv=None):
         argv = sys.argv[1:]
     logging.basicConfig(level=logging.INFO)
     parser = build_parser()
-    run(parser.parse_args(argv))
+    parser.parse_args(argv)
+    logging.info("Running legacy metrics report from cwd={}", os.getcwd())
+    run(input_csv_file="./build/WorkloadOutput/GennyMetrics/genny-metrics.csv",
+        perf_json_file="./build/WorkloadOutput/LegacyPerfJson/perf.json")

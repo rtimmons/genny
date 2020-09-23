@@ -4,23 +4,6 @@ import subprocess
 from contextlib import contextmanager
 
 
-def get_program_args(prog_name):
-    """
-    Returns the argument list used to create the given Genny program.
-
-    If we are in the root of the genny repo, use the local executable. 
-    Otherwise we search the PATH.
-    """
-    args = sys.argv
-
-    executable = prog_name
-    local_prog = os.path.join("./dist/bin", prog_name)
-    if os.path.exists(local_prog):
-        executable = local_prog
-    args[0] = executable
-    return args
-
-
 def get_poplar_args():
     """
     Returns the argument list used to create the Poplar gRPC process.
@@ -30,7 +13,7 @@ def get_poplar_args():
     """
     curator = "curator"
 
-    local_curator = "./curator/curator"
+    local_curator = "./bin/curator/curator"
     if os.path.exists(local_curator):
         curator = local_curator
     return [curator, "poplar", "grpc"]
@@ -49,7 +32,7 @@ def poplar_grpc():
             poplar.terminate()
             exit_code = poplar.wait(timeout=10)
             if exit_code not in (0, -15):  # Termination or exit.
-                raise OSError("Poplar exited with code: {code}.".format(code=(exit_code)))
+                raise OSError("Poplar exited with code: {code}.".format(code=exit_code))
 
         except:
             # If Poplar doesn't die then future runs can be broken.
@@ -64,7 +47,7 @@ def main_genny_runner():
     """
 
     with poplar_grpc():
-        res = subprocess.run(get_program_args("genny_core"))
+        res = subprocess.run("./src/genny/dist/bin/genny_core")
         res.check_returncode()
 
 

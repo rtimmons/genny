@@ -45,4 +45,3 @@ AutoRun:
 
 Metrics:
   Format: ftdc
-  Path: build/genny-metrics
