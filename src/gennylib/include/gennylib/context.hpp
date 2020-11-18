@@ -79,6 +79,7 @@ public:
         return std::move(this->_node.getPlural<T, F>(singular, plural, std::forward<F>(f)));
     }
 
+    [[nodiscard]]
     auto path() const {
         return _node.path();
     }
@@ -342,6 +343,7 @@ public:
     /**
      * @return top-level workload configuration
      */
+    [[nodiscard]]
     constexpr WorkloadContext& workload() const {
         return *this->_workload;
     }
@@ -349,6 +351,7 @@ public:
     /**
      * @return the workload-wide Orchestrator
      */
+    [[nodiscard]]
     constexpr Orchestrator& orchestrator() const {
         return *this->workload()._orchestrator;
     }
@@ -397,11 +400,13 @@ public:
      * configuration in other mechanisms if desired. The `Phases:` structure and
      * related PhaseContext type are purely for conventional convenience.
      */
+    [[nodiscard]]
     constexpr const std::unordered_map<genny::PhaseNumber, std::unique_ptr<PhaseContext>>& phases()
         const {
         return _phaseContexts;
     }
 
+    [[nodiscard]]
     DefaultRandom& rng(ActorId id) {
         return this->workload().getRNGForThread(id);
     }
@@ -411,6 +416,7 @@ public:
      * @throws InvalidConfigurationException if no connections available.
      */
     template <class... Args>
+    [[nodiscard]]
     mongocxx::pool::entry client(Args&&... args) {
         return this->_workload->client(std::forward<Args>(args)...);
     }
@@ -421,6 +427,7 @@ public:
      * @param operationName the name of the operation being run.
      * @param id the id of this Actor.
      */
+    [[nodiscard]]
     auto operation(const std::string& operationName, ActorId id) const {
         return this->_workload->_registry.operation(
             this->_node["Name"].to<std::string>(), operationName, id);
@@ -456,15 +463,18 @@ public:
     /**
      * Called in PhaseLoop during the IterationCompletionCheck constructor.
      */
+    [[nodiscard]]
     bool isNop() const;
 
     /**
      * @return the parent workload context
      */
+    [[nodiscard]]
     WorkloadContext& workload() const {
         return _actor->workload();
     }
 
+    [[nodiscard]]
     ActorContext& actor() const {
         return *_actor;
     }
@@ -479,6 +489,7 @@ public:
      *                          for a phase in the workload YAML.
      * @param id the id of this Actor.
      */
+    [[nodiscard]]
     auto operation(const std::string& defaultMetricsName, ActorId id) const {
         std::ostringstream stm;
         if (auto metricsName = this->_node["MetricsName"].maybe<std::string>()) {
@@ -491,6 +502,7 @@ public:
             this->_actor->operator[]("Name").to<std::string>(), stm.str(), id, _phaseNumber);
     }
 
+    [[nodiscard]]
     const auto getPhaseNumber() const {
         return _phaseNumber;
     }

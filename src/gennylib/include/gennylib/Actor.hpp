@@ -90,6 +90,7 @@ public:
      * have a unique id. This is used for metrics reporting and other purposes.
      * This is obtained from `WorkloadContext.nextActorId()` (see `Actor.cpp`)
      */
+    [[nodiscard]]
     virtual ActorId id() const {
         return _id;
     }

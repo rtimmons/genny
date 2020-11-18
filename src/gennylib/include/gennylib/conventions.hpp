@@ -49,7 +49,7 @@ struct IntegerSpec {
     IntegerSpec() = default;
     ~IntegerSpec() = default;
 
-    IntegerSpec(int64_t v) : value{v} {}
+    explicit IntegerSpec(int64_t v) : value{v} {}
     // int64_t is used by default, you can explicitly cast to another type if needed.
     int64_t value;
 
@@ -86,10 +86,11 @@ public:  // Members
     ValueT value;
 
 public:  // Operators
-    constexpr operator ValueT() const {
+    constexpr explicit operator ValueT() const {
         return value;
     }
 
+    [[nodiscard]]
     constexpr auto count() const {
         return value.count();
     }
@@ -140,10 +141,10 @@ struct PercentileRateSpec {
     PercentileRateSpec() = default;
     ~PercentileRateSpec() = default;
 
-    PercentileRateSpec(IntegerSpec i) : percent{i.value} {}
+    explicit PercentileRateSpec(IntegerSpec i) : percent{i.value} {}
 
     // Allow construction with integers for testing.
-    PercentileRateSpec(int64_t i) : percent{i} {}
+    explicit PercentileRateSpec(int64_t i) : percent{i} {}
     int64_t percent;
 };
 
@@ -159,10 +160,11 @@ public:
     RateSpec() = default;
     ~RateSpec() = default;
 
-    RateSpec(BaseRateSpec s) : _spec{s} {}
+    explicit RateSpec(BaseRateSpec s) : _spec{s} {}
 
-    RateSpec(PercentileRateSpec s) : _spec{s} {}
+    explicit RateSpec(PercentileRateSpec s) : _spec{s} {}
 
+    [[nodiscard]]
     std::optional<BaseRateSpec> getBaseSpec() const {
         if (auto pval = std::get_if<BaseRateSpec>(&_spec)) {
             return *pval;
@@ -171,6 +173,7 @@ public:
         }
     }
 
+    [[nodiscard]]
     std::optional<PercentileRateSpec> getPercentileSpec() const {
         if (auto pval = std::get_if<PercentileRateSpec>(&_spec)) {
             return *pval;
@@ -209,7 +212,8 @@ struct PhaseRangeSpec {
             throw genny::InvalidConfigurationException(msg.str());
         }
     }
-    PhaseRangeSpec(genny::IntegerSpec s) : PhaseRangeSpec(s, s) {}
+
+    explicit PhaseRangeSpec(genny::IntegerSpec s) : PhaseRangeSpec(s, s) {}
 
     genny::PhaseNumber start;
     genny::PhaseNumber end;
@@ -308,11 +312,11 @@ struct convert<mongocxx::write_concern> {
         }
         auto level = node["Level"].as<std::string>();
         try {
-            auto level = node["Level"].as<int>();
-            rhs.nodes(level);
+            auto levelInt = node["Level"].as<int>();
+            rhs.nodes(levelInt);
         } catch (const BadConversion& e) {
-            auto level = node["Level"].as<std::string>();
-            if (level == "majority") {
+            auto levelStr = node["Level"].as<std::string>();
+            if (levelStr == "majority") {
                 rhs.majority(std::chrono::milliseconds{0});
             } else {
                 // writeConcern level must be of valid integer or 'majority'.
@@ -406,8 +410,8 @@ struct convert<genny::PhaseRangeSpec> {
             }
         }
 
-        genny::IntegerSpec start;
-        genny::IntegerSpec end;
+        genny::IntegerSpec start{};
+        genny::IntegerSpec end{};
 
         auto startYaml = Load(strRepr.substr(0, delimPos));
         auto endYaml = Load(strRepr.substr(delimPos + delimiter.size()));
@@ -545,8 +549,8 @@ struct convert<genny::RateSpec> {
 
         if (auto spec = rhs.getBaseSpec()) {
             msg << spec->operations << " per " << spec->per.count() << " nanoseconds";
-        } else if (auto spec = rhs.getPercentileSpec()) {
-            msg << spec->percent << "%";
+        } else if (auto specPercent = rhs.getPercentileSpec()) {
+            msg << specPercent->percent << "%";
         } else {
             throw genny::InvalidConfigurationException("Cannot encode empty RateSpec.");
         }
@@ -567,14 +571,14 @@ struct convert<genny::RateSpec> {
             auto baseSpec = nodeYaml.as<genny::BaseRateSpec>();
             rhs = genny::RateSpec(baseSpec);
             return true;
-        } catch (genny::InvalidConfigurationException e) {
+        } catch (const genny::InvalidConfigurationException& e) {
         }
 
         try {
             auto percentileSpec = nodeYaml.as<genny::PercentileRateSpec>();
             rhs = genny::RateSpec(percentileSpec);
             return true;
-        } catch (genny::InvalidConfigurationException e) {
+        } catch (const genny::InvalidConfigurationException& e) {
         }
 
         std::stringstream msg;
@@ -607,7 +611,7 @@ struct convert<genny::IntegerSpec> {
         // Use double here to support the scientific notation.
         double_t num = std::stod(strRepr, &pos);
 
-        if (pos != strRepr.length() || std::llround(num) != num) {
+        if (pos != strRepr.length() || double_t(std::llround(num)) != num) {
             std::stringstream msg;
             msg << "Invalid value for genny::IntegerSpec field: " << strRepr
                 << " from config: " << strRepr;
@@ -618,7 +622,6 @@ struct convert<genny::IntegerSpec> {
             std::stringstream msg;
             msg << "Value for genny::IntegerSpec can't be negative: " << num
                 << " from config: " << strRepr;
-            ;
             throw genny::InvalidConfigurationException(msg.str());
         }
 

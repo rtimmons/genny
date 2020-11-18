@@ -103,6 +103,7 @@ public:
         return _value < rhs._value;
     }
 
+    [[nodiscard]]
     std::string toString() const;
 
     friend std::ostream& operator<<(std::ostream& out, const ::genny::v1::NodeKey& key) {
@@ -285,6 +286,7 @@ public:
      *   or the key is outside the list of valid indexes) then will
      *   return a `Node&` that evaluates to false according to `operator bool`.
      */
+    [[nodiscard]]
     const Node& operator[](long index) const;
 
     /**
@@ -298,6 +300,7 @@ public:
      *   or the Node's keyset doesn't contain `key`) then will
      *   return a `Node&` that evaluates to false according to `operator bool`.
      */
+    [[nodiscard]]
     const Node& operator[](const std::string& key) const;
 
     /**
@@ -305,36 +308,42 @@ public:
      *   If this Node is defined.
      *   A node that is defined to be false or even null is still defined.
      */
+    [[nodiscard]]
     explicit operator bool() const;
 
     /**
      * @return
      *   The type of this Node.
      */
+    [[nodiscard]]
     Type type() const;
 
     /**
      * @return
      *   If this node is a scalar.
      */
+    [[nodiscard]]
     bool isScalar() const;
 
     /**
      * @return
      *   If this node is null.
      */
+    [[nodiscard]]
     bool isNull() const;
 
     /**
      * @return
      *   If this node is a map.
      */
+    [[nodiscard]]
     bool isMap() const;
 
     /**
      * @return
      *   If this node is a sequence (array).
      */
+    [[nodiscard]]
     bool isSequence() const;
 
     /**
@@ -342,6 +351,7 @@ public:
      *   How many children this node has.
      *   Scalar nodes have size zero.
      */
+    [[nodiscard]]
     size_t size() const;
 
     /**
@@ -352,6 +362,7 @@ public:
      *   accessed from a sequence. E.g. `node[0]` would
      *   have key `"0"`.
      */
+    [[nodiscard]]
     std::string key() const;
 
     /**
@@ -359,11 +370,13 @@ public:
      *   The full path to this Node. Path
      *   elements are separated by `/`.
      */
+    [[nodiscard]]
     std::string path() const;
 
     /**
      * @return the YAML tag associated with this node.
      */
+    [[nodiscard]]
     std::string tag() const;
 
     /**
@@ -382,11 +395,13 @@ public:
      *
      * @return start iterator
      */
+    [[nodiscard]]
     class NodeIterator begin() const;
 
     /**
      * @return end iterator
      */
+    [[nodiscard]]
     class NodeIterator end() const;
 
     /**
@@ -408,6 +423,7 @@ public:
      * (`std::nullopt`).
      */
     template <typename O = Node, typename... Args>
+    [[nodiscard]]
     std::optional<O> maybe(Args&&... args) const {
         // Doesn't seem possible to test these static asserts since you'd get a compiler error
         // (by design) when trying to call node.to<YAML::Node>().
@@ -463,6 +479,7 @@ public:
      *   if cannot convert to O or if value is not specified
      */
     template <typename O, typename... Args>
+    [[nodiscard]]
     O to(Args&&... args) const {
         auto out = maybe<O, Args...>(std::forward<Args>(args)...);
         if (!out) {
@@ -529,6 +546,7 @@ public:
     // The implementation is below because we require the full class definition
     // within the implementation.
     template <typename T, typename F = std::function<T(const Node&)>>
+    [[nodiscard]]
     std::vector<T> getPlural(
         const std::string& singular,
         const std::string& plural,
