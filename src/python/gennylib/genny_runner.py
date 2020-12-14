@@ -3,8 +3,10 @@ import os
 import subprocess
 from contextlib import contextmanager
 
+from typing import List
 
-def get_program_args(prog_name):
+
+def get_program_args(prog_name: str):
     """
     Returns the argument list used to create the given Genny program.
 
@@ -12,33 +14,20 @@ def get_program_args(prog_name):
     Otherwise we search the PATH.
     """
     args = sys.argv
-
-    executable = prog_name
-    local_prog = os.path.join("./dist/bin", prog_name)
-    if os.path.exists(local_prog):
-        executable = local_prog
-    args[0] = executable
+    args[0] = prog_name
     return args
 
 
-def get_poplar_args():
+def get_curator_args() -> List[str]:
     """
-    Returns the argument list used to create the Poplar gRPC process.
-
-    If we are in the root of the genny repo, use the local executable. 
-    Otherwise we search the PATH.
+    :return the argument list used to create the Poplar gRPC process.
     """
-    curator = "curator"
-
-    local_curator = "./curator/curator"
-    if os.path.exists(local_curator):
-        curator = local_curator
-    return [curator, "poplar", "grpc"]
+    return ["./bin/curator", "poplar", "grpc"]
 
 
 @contextmanager
 def poplar_grpc():
-    poplar = subprocess.Popen(get_poplar_args())
+    poplar = subprocess.Popen(get_curator_args())
     if poplar.poll() is not None:
         raise OSError("Failed to start Poplar.")
 
@@ -49,7 +38,7 @@ def poplar_grpc():
             poplar.terminate()
             exit_code = poplar.wait(timeout=10)
             if exit_code not in (0, -15):  # Termination or exit.
-                raise OSError("Poplar exited with code: {code}.".format(code=(exit_code)))
+                raise OSError("Poplar exited with code: {code}.".format(code=exit_code))
 
         except:
             # If Poplar doesn't die then future runs can be broken.

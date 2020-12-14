@@ -9,6 +9,8 @@ import yamllint.cli
 def main():
     logging.basicConfig(level=logging.INFO)
 
+    os.chdir("./src/genny")
+
     if not path.exists(".genny-root"):
         logging.error("Please run this script from the root of the Genny repository")
         sys.exit(1)

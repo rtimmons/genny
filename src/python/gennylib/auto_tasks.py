@@ -62,13 +62,12 @@ class WorkloadLister:
     Separate from the Repo class for easier testing.
     """
 
-    def __init__(self, repo_root: str, reader: YamlReader):
-        self.repo_root = repo_root
+    def __init__(self, reader: YamlReader):
         self._expansions = None
         self.reader = reader
 
     def all_workload_files(self) -> Set[str]:
-        pattern = os.path.join(self.repo_root, "src", "workloads", "**", "*.yml")
+        pattern = os.path.join("src", "genny", "workloads", "**", "*.yml")
         return {*glob.glob(pattern)}
 
     def modified_workload_files(self) -> Set[str]:
@@ -77,8 +76,8 @@ class WorkloadLister:
             "git diff --name-only --diff-filter=AMR "
             "$(git merge-base HEAD origin/master) -- src/workloads/"
         )
-        lines = _check_output(self.repo_root, command, shell=True)
-        return {os.path.join(self.repo_root, line) for line in lines if line.endswith(".yml")}
+        lines = _check_output(os.path.join("src", "genny"), command, shell=True)
+        return {os.path.join("src", "genny", line) for line in lines if line.endswith(".yml")}
 
 
 class OpName(enum.Enum):
@@ -98,11 +97,6 @@ class CLIOperation(NamedTuple):
 
     mode: OpName
     variant: Optional[str]
-    output_file_suffix: str
-
-    @property
-    def repo_root(self) -> str:
-        return "./src/genny"
 
     @property
     def output_file(self) -> str:
@@ -189,8 +183,8 @@ class Workload:
         return str(os.path.basename(self.file_path).split(".yml")[0])
 
     @property
-    def relative_path(self) -> str:
-        return self.file_path.split("src/workloads/")[1]
+    def path_relative_to_cwd(self) -> str:
+        return self.file_path
 
     def all_tasks(self) -> List[GeneratedTask]:
         """
@@ -338,7 +332,7 @@ class ConfigWriter:
         for task in tasks:
             bootstrap = {
                 "test_control": task.name,
-                "auto_workload_path": task.workload.relative_path,
+                "auto_workload_path": task.workload.path_relative_to_cwd,
             }
             if task.mongodb_setup:
                 bootstrap["mongodb_setup"] = task.mongodb_setup
@@ -379,7 +373,7 @@ def main() -> None:
     reader = YamlReader()
     build = CurrentBuildInfo(reader)
     op = CLIOperation.parse(argv, reader)
-    lister = WorkloadLister(op.repo_root, reader)
+    lister = WorkloadLister(reader)
     repo = Repo(lister, reader)
     tasks = repo.tasks(op, build)
 
